@@ -1,0 +1,8 @@
+llm:
+  base_url: "http://127.0.0.1:8080/v1"
+  api_key_file: "./api-key"
+  model: "config_qwen35-9b-nvfp4"
+  timeout_seconds: 120
+
+log:
+  level: "info"
