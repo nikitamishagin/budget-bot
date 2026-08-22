@@ -13,8 +13,8 @@ local SQLite database, Telegram bot (as a source of data about expenses), and Go
   expense data (amount, currency, merchant, date, category, etc.).
 - **Google Drive sync** — sync the SQLite file to Google Drive (third-party backup of Cashew application).
 - **SQLite editor** — insert parsed data (expenses) into the database file.
-- **Finding a suitable topic** — find a suitable topic for the expense in the database or memory file (e.g., expense with
-  the same description in the database).
+- **Finding a suitable topic** — find a suitable topic for the expense in the database or memory file (e.g., expense
+  with the same description in the database).
 - **Duplicate/conflict handling** — before/after insert, detect duplicate entries (e.g., same expenses, same transaction
   twice) and resolve conflicts in the table.
 
@@ -47,7 +47,9 @@ Frameworks:
 - internal/telegram/ - Telegram bot backend
 - internal/LLMparser/ - LLM prompt and parsing logic
 - internal/drivesync/ - Google Drive sync
-- internal/handler/ - Find suitable topics and handle memory
+- internal/memory/ - Postgres-backed agent memory (learned topic/category/wallet mappings, bank account mappings,
+  similarity search)
+- internal/handler/ - Enrichment loop: find suitable topics using memory/LLM, decide when to ask the user
 - internal/store/ - SQLite access, dedup/conflict logic
 - something else if it can be helpful
 
@@ -58,8 +60,8 @@ Frameworks:
 - Implement logging with several log levels.
 - Write simple tests to cover critical paths.
 - Use linter to enforce code quality.
-- Secrets (Telegram bot token, Google OAuth credentials) and other parameters live in a YAML config file, never hardcoded
-  or committed.
+- Secrets (Telegram bot token, Google OAuth credentials) and other parameters live in a YAML config file, never
+  hardcoded or committed.
 
 ## LLM parsing notes
 

@@ -23,7 +23,7 @@ type Client struct {
 }
 
 // NewClient creates a Client for the given base URL (e.g. "http://127.0.0.1:8080/v1"),
-// API key, model name and request timeout.
+// API key, model name, and request timeout.
 func NewClient(baseURL, apiKey, model string, timeout time.Duration) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -102,15 +102,25 @@ func (c *Client) ParseImageBytes(ctx context.Context, imageData []byte, mimeType
 		Temperature: 0,
 	}
 
+	content, err := c.chatCompletion(ctx, reqBody)
+	if err != nil {
+		return nil, err
+	}
+	return parseExpensesJSON(content)
+}
+
+// chatCompletion sends a chat completion request and returns the raw text content of the first
+// choice in the response.
+func (c *Client) chatCompletion(ctx context.Context, reqBody chatRequest) (string, error) {
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
 	url := c.baseURL + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
+		return "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
@@ -119,36 +129,35 @@ func (c *Client) ParseImageBytes(ctx context.Context, imageData []byte, mimeType
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("call llm: %w", err)
+		return "", fmt.Errorf("call llm: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return "", fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("llm returned status %d: %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("llm returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var chatResp chatResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, fmt.Errorf("unmarshal llm response: %w", err)
+		return "", fmt.Errorf("unmarshal llm response: %w", err)
 	}
 	if chatResp.Error != nil {
-		return nil, fmt.Errorf("llm error: %s", chatResp.Error.Message)
+		return "", fmt.Errorf("llm error: %s", chatResp.Error.Message)
 	}
 	if len(chatResp.Choices) == 0 {
-		return nil, fmt.Errorf("llm returned no choices")
+		return "", fmt.Errorf("llm returned no choices")
 	}
 
-	content := chatResp.Choices[0].Message.Content
-	return parseExpensesJSON(content)
+	return chatResp.Choices[0].Message.Content, nil
 }
 
 // parseExpensesJSON extracts and unmarshals the Expense JSON array (or a single object, for
-// backward/robustness reasons) from the model's raw text output, tolerating surrounding markdown
+// backward/robustness reasons) from the model's raw text output, tolerating surrounding Markdown
 // code fences or extra text.
 func parseExpensesJSON(content string) ([]Expense, error) {
 	if arrStr := extractJSONArray(content); arrStr != "" {
@@ -171,7 +180,7 @@ func parseExpensesJSON(content string) ([]Expense, error) {
 }
 
 // extractJSONArray returns the substring between the first '[' and the matching last ']',
-// but only if that range appears before/around any top-level JSON object, i.e. the response
+// but only if that range appears before/around any top-level JSON object, i.e., the response
 // is (or starts with) a JSON array rather than a single object.
 func extractJSONArray(s string) string {
 	start := strings.Index(s, "[")

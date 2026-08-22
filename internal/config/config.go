@@ -21,10 +21,23 @@ type LogConfig struct {
 	Level string `mapstructure:"level"`
 }
 
+// MemoryConfig holds settings for the Postgres-backed agent memory.
+type MemoryConfig struct {
+	Host                    string  `mapstructure:"host"`
+	Port                    int     `mapstructure:"port"`
+	User                    string  `mapstructure:"user"`
+	Password                string  `mapstructure:"password"`
+	DBName                  string  `mapstructure:"dbname"`
+	SSLMode                 string  `mapstructure:"sslmode"`
+	TopN                    int     `mapstructure:"top_n"`
+	HighConfidenceThreshold float64 `mapstructure:"high_confidence_threshold"`
+}
+
 // Config is the root application configuration.
 type Config struct {
-	LLM LLMConfig `mapstructure:"llm"`
-	Log LogConfig `mapstructure:"log"`
+	LLM    LLMConfig    `mapstructure:"llm"`
+	Log    LogConfig    `mapstructure:"log"`
+	Memory MemoryConfig `mapstructure:"memory"`
 }
 
 // Load reads the configuration from the given YAML file path and applies defaults.
@@ -38,6 +51,11 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("llm.model", "config_qwen35-9b-nvfp4")
 	v.SetDefault("llm.timeout_seconds", 120)
 	v.SetDefault("log.level", "info")
+	v.SetDefault("memory.host", "127.0.0.1")
+	v.SetDefault("memory.port", 5432)
+	v.SetDefault("memory.sslmode", "disable")
+	v.SetDefault("memory.top_n", 5)
+	v.SetDefault("memory.high_confidence_threshold", 0.9)
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read config file %q: %w", path, err)
@@ -79,4 +97,10 @@ func (c *Config) APIKey() (string, error) {
 		return "", fmt.Errorf("read api key file %q: %w", c.LLM.APIKeyFile, err)
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+// DSN builds a Postgres connection string from the memory configuration.
+func (c *Config) DSN() string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		c.Memory.User, c.Memory.Password, c.Memory.Host, c.Memory.Port, c.Memory.DBName, c.Memory.SSLMode)
 }

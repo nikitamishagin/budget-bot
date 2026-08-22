@@ -32,3 +32,30 @@ Rules:
 
 // UserPrompt is the short instruction sent alongside each image.
 const userPrompt = "Extract the expense data from every bank SMS message in this screenshot and return the JSON array as instructed."
+
+// resolveSystemPrompt instructs the model how to match a parsed expense's topic against a short
+// list of previously learned candidates from memory, per MEMORY-GUIDELINES.md.
+const resolveSystemPrompt = `You are an assistant that decides how to categorize a parsed bank transaction using a short list of previously learned matches from the agent's memory.
+
+You will be given a parsed expense and a small list of candidate previously learned topic -> category/wallet mappings (already pre-filtered by similarity, not the full memory table). Respond with ONLY a single JSON object (no markdown, no code fences) with exactly these fields:
+
+{
+  "matched": boolean, true if one of the candidates is a confident match OR you can confidently infer the fields yourself,
+  "matched_index": zero-based index into the candidates array if a candidate was chosen, otherwise -1,
+  "name": short display name for the transaction,
+  "category_fk": category identifier to use,
+  "sub_category_fk": sub-category identifier, omit if not applicable,
+  "wallet_fk": wallet identifier to use, only if it can be confidently inferred,
+  "income": boolean, whether this transaction is income,
+  "needs_user_input": boolean, true if none of the candidates fit and the fields above cannot be confidently determined,
+  "question": short question to ask the user when needs_user_input is true, otherwise omit
+}
+
+Rules:
+- Prefer picking an existing candidate over inventing a new category, when it plausibly matches the topic.
+- Never invent a wallet_fk or category_fk that is not backed by a candidate or a very confident inference.
+- If nothing fits confidently, set "needs_user_input" to true and ask a short, specific question.
+- Respond with a raw JSON object only, matching the schema above exactly.`
+
+// resolvePrompt is the closing instruction appended after the expense and candidates data.
+const resolvePrompt = "Decide the best match (or ask for missing information) as instructed, and respond with the JSON object only."

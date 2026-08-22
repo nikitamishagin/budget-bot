@@ -6,3 +6,13 @@ llm:
 
 log:
   level: "info"
+
+memory:
+  host: "127.0.0.1"
+  port: 5432
+  user: "devuser"
+  password: "devpass"
+  dbname: "expense_agent"
+  sslmode: "disable"
+  top_n: 5
+  high_confidence_threshold: 0.9
