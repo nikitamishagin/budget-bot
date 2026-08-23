@@ -10,6 +10,7 @@ import (
 
 	"github.com/nikitamishagin/budget-bot/internal/handler"
 	"github.com/nikitamishagin/budget-bot/internal/llmparser"
+	"github.com/nikitamishagin/budget-bot/internal/store"
 )
 
 // ImageParser is the subset of *llmparser.Client the bot depends on.
@@ -19,8 +20,16 @@ type ImageParser interface {
 
 // Enricher is the subset of *handler.Enricher the bot depends on.
 type Enricher interface {
-	Enrich(ctx context.Context, exp llmparser.Expense) (handler.Result, error)
+	Enrich(ctx context.Context, exp llmparser.Expense, db ...handler.DBLookup) (handler.Result, error)
 	ResolveWithUserInput(ctx context.Context, exp llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool) (*handler.EnrichedExpense, error)
+}
+
+// ExpenseWriter is the subset of *store.Store used to find fallback enrichment candidates and
+// persist an approved expense directly in the user's uploaded SQLite database file.
+type ExpenseWriter interface {
+	handler.DBLookup
+	Insert(ctx context.Context, exp handler.EnrichedExpense) (store.InsertResult, error)
+	Close() error
 }
 
 // AccountResolver is the subset of memory.Store used to turn a user-supplied wallet answer into a

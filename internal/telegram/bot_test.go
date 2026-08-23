@@ -10,6 +10,7 @@ import (
 
 	"github.com/nikitamishagin/budget-bot/internal/handler"
 	"github.com/nikitamishagin/budget-bot/internal/llmparser"
+	"github.com/nikitamishagin/budget-bot/internal/store"
 )
 
 func TestTelegram(t *testing.T) {
@@ -52,18 +53,38 @@ func (f *fakeSender) last() string {
 	return f.messages[len(f.messages)-1]
 }
 
-// newTestBot creates a Bot backed by a temporary directory for database files, and immediately
-// feeds it a fake database upload for chat 1 so tests that focus on screenshot/enrichment
-// behavior don't need to repeat that setup.
+// newTestBot creates a Bot backed by a temporary directory for database files, wired to a fake
+// ExpenseWriter (so tests never touch a real SQLite driver), and immediately feeds it a fake
+// database upload for chat 1 so tests that focus on screenshot/enrichment behavior don't need to
+// repeat that setup.
 func newTestBot(sender Sender, parser ImageParser, enricher Enricher, accounts AccountResolver, allowedUsernames []string) *Bot {
 	dir, err := os.MkdirTemp("", "telegram-test-*")
 	if err != nil {
 		panic(err)
 	}
 	bot := NewBot(sender, parser, enricher, accounts, allowedUsernames, dir)
+	bot.OpenDatabase = func(string) (ExpenseWriter, error) { return newFakeWriter(), nil }
 	bot.HandleDocument(1, "expenses.sqlite", []byte("fake-db"))
 	return bot
 }
+
+// fakeWriter is a stub ExpenseWriter for tests, so bot tests never need a real SQLite file.
+type fakeWriter struct {
+	inserted []handler.EnrichedExpense
+}
+
+func newFakeWriter() *fakeWriter { return &fakeWriter{} }
+
+func (f *fakeWriter) FindCandidates(_ context.Context, _ string, _ int) ([]handler.DBCandidate, error) {
+	return nil, nil
+}
+
+func (f *fakeWriter) Insert(_ context.Context, exp handler.EnrichedExpense) (store.InsertResult, error) {
+	f.inserted = append(f.inserted, exp)
+	return store.InsertResult{TransactionPK: "fake-pk"}, nil
+}
+
+func (f *fakeWriter) Close() error { return nil }
 
 // fakeParser is a scripted ImageParser for tests.
 type fakeParser struct {
@@ -83,7 +104,7 @@ type fakeEnricher struct {
 	resolveArgs  []string
 }
 
-func (f *fakeEnricher) Enrich(_ context.Context, _ llmparser.Expense) (handler.Result, error) {
+func (f *fakeEnricher) Enrich(_ context.Context, _ llmparser.Expense, _ ...handler.DBLookup) (handler.Result, error) {
 	return f.result, f.err
 }
 
@@ -288,12 +309,44 @@ var _ = Describe("Bot.HandleDocument", func() {
 		dir, err := os.MkdirTemp("", "telegram-test-*")
 		Expect(err).NotTo(HaveOccurred())
 		bot := NewBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"}, dir)
+		bot.OpenDatabase = func(string) (ExpenseWriter, error) { return newFakeWriter(), nil }
 
 		bot.HandleDocument(1, "expenses.sqlite", []byte("fake-db"))
 		Expect(sender.last()).To(ContainSubstring("Database saved"))
 
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
 		Expect(sender.last()).To(ContainSubstring("Save this transaction?"))
+	})
+
+	It("rejects a document that is not a valid SQLite database", func() {
+		sender := &fakeSender{}
+		parser := &fakeParser{}
+		dir, err := os.MkdirTemp("", "telegram-test-*")
+		Expect(err).NotTo(HaveOccurred())
+		bot := NewBot(sender, parser, &fakeEnricher{}, newFakeAccounts(), []string{"alice"}, dir)
+		bot.OpenDatabase = func(string) (ExpenseWriter, error) { return nil, assertError{} }
+
+		bot.HandleDocument(1, "not-a-db.sqlite", []byte("not sqlite at all"))
+
+		Expect(sender.last()).To(ContainSubstring("does not look like a valid SQLite"))
+	})
+})
+
+var _ = Describe("Bot approval saving", func() {
+	It("inserts the enriched expense into the chat's database before returning it", func() {
+		sender := &fakeSender{}
+		writer := newFakeWriter()
+		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks", Amount: 5.5, CategoryFK: "cat-coffee", WalletFK: "wallet-1"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
+		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
+		bot.OpenDatabase = func(string) (ExpenseWriter, error) { return writer, nil }
+		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+
+		bot.HandleText(context.Background(), 1, "yes")
+
+		Expect(writer.inserted).To(HaveLen(1))
+		Expect(writer.inserted[0].Name).To(Equal("Starbucks"))
+		Expect(sender.sentDocs).To(Equal(1))
 	})
 })
 

@@ -30,9 +30,12 @@ type Bot struct {
 	AllowedUsernames map[string]bool
 	// DBDir is the directory (from config) where uploaded SQLite database files are saved, per
 	// TELEGRAM_GUIDELINES.md.
-	DBDir     string
-	sessions  *sessions
-	databases *databases
+	DBDir string
+	// OpenDatabase opens the SQLite database file uploaded by a chat; defaults to openStore, and
+	// is a field mainly so tests can substitute a fake ExpenseWriter.
+	OpenDatabase func(path string) (ExpenseWriter, error)
+	sessions     *sessions
+	databases    *databases
 }
 
 // NewBot creates a Bot. allowedUsernames may be empty, in which case every user is rejected -
@@ -50,6 +53,7 @@ func NewBot(sender Sender, parser ImageParser, enricher Enricher, accounts Accou
 		Accounts:         accounts,
 		AllowedUsernames: allowed,
 		DBDir:            dbDir,
+		OpenDatabase:     openStore,
 		sessions:         newSessions(),
 		databases:        newDatabases(),
 	}
@@ -80,7 +84,9 @@ func (b *Bot) HandleCommand(chatID int64, command string) {
 }
 
 // HandleDocument saves an uploaded SQLite database file for the chat and unlocks screenshot
-// processing, per TELEGRAM_GUIDELINES.md step 3-4 of the common communication flow.
+// processing, per TELEGRAM_GUIDELINES.md step 3-4 of the common communication flow. If the file
+// is not a valid Cashew SQLite database, it is rejected with an error message, per AGENTS.md step
+// 2 ("If it isn't an SQLite, the agent returns an error message about it").
 func (b *Bot) HandleDocument(chatID int64, fileName string, data []byte) {
 	if err := os.MkdirAll(b.DBDir, 0o755); err != nil {
 		log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to create database directory")
@@ -97,6 +103,15 @@ func (b *Bot) HandleDocument(chatID int64, fileName string, data []byte) {
 		log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to write database file")
 		b.reply(chatID, "Sorry, I could not save that file. Please try again.")
 		return
+	}
+
+	if db, err := b.OpenDatabase(path); err != nil {
+		log.Warn().Err(err).Int64("chat_id", chatID).Msg("rejected non-Cashew-SQLite document from user")
+		_ = os.Remove(path)
+		b.reply(chatID, "That does not look like a valid SQLite expense database. Please send a valid file.")
+		return
+	} else {
+		_ = db.Close()
 	}
 
 	b.databases.set(chatID, path)
@@ -191,12 +206,15 @@ func (b *Bot) handleCategoryAnswer(ctx context.Context, chatID int64, state *pen
 	b.askApproval(chatID, enriched)
 }
 
-func (b *Bot) handleApprovalAnswer(_ context.Context, chatID int64, state *pendingState, answer string) {
+func (b *Bot) handleApprovalAnswer(ctx context.Context, chatID int64, state *pendingState, answer string) {
 	switch strings.ToLower(answer) {
 	case "yes", "y", "confirm", "ok":
-		// TODO: hand off state.enriched to internal/store once the SQLite/Cashew writer and
-		// dedup/conflict logic are wired in; for now, the database file is returned unmodified.
 		log.Info().Int64("chat_id", chatID).Interface("expense", state.enriched).Msg("expense approved for saving")
+		if err := b.saveExpense(ctx, chatID, state.enriched); err != nil {
+			log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to save expense to database")
+			b.reply(chatID, "Sorry, I could not save that to your database. Please try again.")
+			return
+		}
 		b.sessions.clear(chatID)
 		b.returnDatabase(chatID)
 	case "no", "n", "cancel":
@@ -206,6 +224,33 @@ func (b *Bot) handleApprovalAnswer(_ context.Context, chatID int64, state *pendi
 	default:
 		b.reply(chatID, "Please answer \"yes\" or \"no\".")
 	}
+}
+
+// saveExpense inserts the approved expense into the chat's SQLite database file, per AGENTS.md's
+// "SQLite editor" responsibility, skipping the insert (but not treating it as an error) when a
+// duplicate transaction is detected, per "Duplicate/conflict handling".
+func (b *Bot) saveExpense(ctx context.Context, chatID int64, enriched *handler.EnrichedExpense) error {
+	path, ok := b.databases.get(chatID)
+	if !ok {
+		return fmt.Errorf("no database file on file for this chat")
+	}
+
+	db, err := b.OpenDatabase(path)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	result, err := db.Insert(ctx, *enriched)
+	if err != nil {
+		return fmt.Errorf("insert expense: %w", err)
+	}
+	if result.Duplicate {
+		log.Info().Int64("chat_id", chatID).Str("transaction_pk", result.TransactionPK).Msg("expense already exists in database, skipped insert")
+	} else {
+		log.Info().Int64("chat_id", chatID).Str("transaction_pk", result.TransactionPK).Msg("inserted expense into database")
+	}
+	return nil
 }
 
 // returnDatabase sends the chat's saved SQLite database file back, per TELEGRAM_GUIDELINES.md:
@@ -233,9 +278,21 @@ func (b *Bot) returnDatabase(chatID int64) {
 }
 
 // enrichAndAsk runs the enrichment loop for a single parsed expense and either asks the chat a
-// follow-up question or, once fully enriched, asks for a save approval.
+// follow-up question or, once fully enriched, asks for a save approval. It falls back to
+// searching the chat's own SQLite database file for candidates when memory has none, per
+// AGENTS.md step 8.
 func (b *Bot) enrichAndAsk(ctx context.Context, chatID int64, exp llmparser.Expense) {
-	result, err := b.Enricher.Enrich(ctx, exp)
+	var dbLookups []handler.DBLookup
+	if path, ok := b.databases.get(chatID); ok {
+		if db, err := b.OpenDatabase(path); err == nil {
+			defer db.Close()
+			dbLookups = append(dbLookups, db)
+		} else {
+			log.Warn().Err(err).Int64("chat_id", chatID).Msg("failed to open database file for candidate lookup")
+		}
+	}
+
+	result, err := b.Enricher.Enrich(ctx, exp, dbLookups...)
 	if err != nil {
 		log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to enrich expense")
 		b.reply(chatID, "Sorry, something went wrong while processing that transaction.")

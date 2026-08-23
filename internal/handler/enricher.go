@@ -24,6 +24,24 @@ type Resolver interface {
 	ResolveTopic(ctx context.Context, expense llmparser.Expense, candidates []llmparser.Candidate) (llmparser.Resolution, error)
 }
 
+// DBLookup finds fallback enrichment candidates directly in the user's SQLite database file,
+// used when memory (Postgres) has no candidates for a topic - see AGENTS.md step 8 of the main
+// loop: "If the agent doesn't find something [in memory], it attempts to find matches in the
+// SQLite data file [...] it gets several best matches (fuzzy/substring)".
+type DBLookup interface {
+	FindCandidates(ctx context.Context, topic string, limit int) ([]DBCandidate, error)
+}
+
+// DBCandidate is candidate enrichment (name/category/wallet/income) found directly in the
+// user's SQLite database file.
+type DBCandidate struct {
+	Name          string
+	CategoryFK    string
+	SubCategoryFK string
+	WalletFK      string
+	Income        bool
+}
+
 // Enricher enriches parsed expenses with the fields required by the Cashew schema, consulting
 // memory first (per MEMORY-GUIDELINES.md) and only calling the LLM/user when needed.
 type Enricher struct {
@@ -51,8 +69,10 @@ func NewEnricher(store MemoryStore, resolver Resolver, topN int, highConfidenceT
 
 // Enrich turns a parsed llmparser.Expense into an EnrichedExpense ready to insert, or into a
 // Result asking the user for missing information. It never calls the LLM when a high-confidence
-// memory match already exists, and it never passes more than TopN candidates to the LLM.
-func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense) (Result, error) {
+// memory match already exists, and it never passes more than TopN candidates to the LLM. An
+// optional DBLookup (db) is consulted as a fallback candidate source, when memory has none, per
+// AGENTS.md step 8.
+func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLookup) (Result, error) {
 	if exp.ParseFailed {
 		reason := exp.FailureReason
 		if reason == "" {
@@ -92,7 +112,16 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense) (Result, e
 		return Result{}, fmt.Errorf("find top candidates: %w", err)
 	}
 
-	resolution, err := e.Resolver.ResolveTopic(ctx, exp, toLLMCandidates(candidates))
+	llmCandidates := toLLMCandidates(candidates)
+	if len(llmCandidates) == 0 && len(db) > 0 && db[0] != nil {
+		dbCandidates, err := db[0].FindCandidates(ctx, topic, e.TopN)
+		if err != nil {
+			return Result{}, fmt.Errorf("find db candidates: %w", err)
+		}
+		llmCandidates = dbToLLMCandidates(dbCandidates)
+	}
+
+	resolution, err := e.Resolver.ResolveTopic(ctx, exp, llmCandidates)
 	if err != nil {
 		return Result{}, fmt.Errorf("resolve topic: %w", err)
 	}
@@ -113,8 +142,8 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense) (Result, e
 		WalletFK:      walletFK,
 		Income:        resolution.Income,
 	}
-	if resolution.MatchedIndex >= 0 && resolution.MatchedIndex < len(candidates) {
-		chosen := candidates[resolution.MatchedIndex]
+	if resolution.MatchedIndex >= 0 && resolution.MatchedIndex < len(llmCandidates) {
+		chosen := llmCandidates[resolution.MatchedIndex]
 		pair.Name = chosen.Name
 		pair.CategoryFK = chosen.CategoryFK
 		pair.SubCategoryFK = chosen.SubCategoryFK
@@ -129,9 +158,9 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense) (Result, e
 }
 
 // ResolveWithUserInput records the user-supplied enrichment fields for a previously ambiguous
-// expense into memory, and returns the now-complete EnrichedExpense. This closes the loop
+// expense into memory and returns the now-complete EnrichedExpense. This closes the loop
 // described in MEMORY-GUIDELINES.md: any decision made (by the LLM or the user) flows back into
-// memory so the same topic/account is recognized automatically next time.
+// memory, so the same topic/account is recognized automatically next time.
 func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool) (*EnrichedExpense, error) {
 	if categoryFK == "" || walletFK == "" {
 		return nil, fmt.Errorf("category_fk and wallet_fk are required")
@@ -190,6 +219,20 @@ func (e *Enricher) buildExpense(exp llmparser.Expense, pair memory.TrainingPair,
 }
 
 func toLLMCandidates(candidates []memory.Candidate) []llmparser.Candidate {
+	out := make([]llmparser.Candidate, 0, len(candidates))
+	for _, c := range candidates {
+		out = append(out, llmparser.Candidate{
+			Name:          c.Name,
+			CategoryFK:    c.CategoryFK,
+			SubCategoryFK: c.SubCategoryFK,
+			WalletFK:      c.WalletFK,
+			Income:        c.Income,
+		})
+	}
+	return out
+}
+
+func dbToLLMCandidates(candidates []DBCandidate) []llmparser.Candidate {
 	out := make([]llmparser.Candidate, 0, len(candidates))
 	for _, c := range candidates {
 		out = append(out, llmparser.Candidate{
