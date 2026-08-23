@@ -106,8 +106,10 @@ func handleUpdate(ctx context.Context, bot *Bot, sender Sender, update tgbotapi.
 
 	switch {
 	case msg.IsCommand():
+		log.Info().Str("username", username).Int64("chat_id", chatID).Str("command", msg.Command()).Msg("user sent command")
 		bot.HandleCommand(chatID, msg.Command())
 	case msg.Document != nil:
+		log.Info().Str("username", username).Int64("chat_id", chatID).Str("file_name", msg.Document.FileName).Msg("received file from user")
 		data, err := sender.DownloadDocument(msg.Document.FileID)
 		if err != nil {
 			log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to download document")
@@ -116,6 +118,7 @@ func handleUpdate(ctx context.Context, bot *Bot, sender Sender, update tgbotapi.
 		}
 		bot.HandleDocument(chatID, msg.Document.FileName, data)
 	case len(msg.Photo) > 0:
+		log.Info().Str("username", username).Int64("chat_id", chatID).Msg("received screenshot from user")
 		largest := msg.Photo[len(msg.Photo)-1]
 		data, err := sender.DownloadPhoto(largest.FileID)
 		if err != nil {
@@ -125,6 +128,7 @@ func handleUpdate(ctx context.Context, bot *Bot, sender Sender, update tgbotapi.
 		}
 		bot.HandlePhoto(ctx, chatID, data, "image/jpeg")
 	case msg.Text != "":
+		log.Info().Str("username", username).Int64("chat_id", chatID).Msg("received text reply from user")
 		bot.HandleText(ctx, chatID, msg.Text)
 	}
 }

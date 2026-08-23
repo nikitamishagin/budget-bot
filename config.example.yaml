@@ -18,5 +18,6 @@ memory:
   high_confidence_threshold: 0.9
 telegram:
   token_file: "./telegram-bot-token"
-  allowed_usernames: []
+  allowed_usernames:
+    - "@nikitamishagin"
   db_path: "./data/databases"

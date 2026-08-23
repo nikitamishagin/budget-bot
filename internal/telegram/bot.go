@@ -100,6 +100,7 @@ func (b *Bot) HandleDocument(chatID int64, fileName string, data []byte) {
 	}
 
 	b.databases.set(chatID, path)
+	log.Info().Int64("chat_id", chatID).Str("path", path).Msg("saved database file from user")
 	b.reply(chatID, "Database saved. Now send me screenshots of your bank SMS about expenses.")
 }
 
@@ -123,6 +124,8 @@ func (b *Bot) HandlePhoto(ctx context.Context, chatID int64, imageData []byte, m
 		b.reply(chatID, "I could not find any transaction in that screenshot.")
 		return
 	}
+
+	log.Info().Int64("chat_id", chatID).Int("count", len(expenses)).Msg("parsed expenses from screenshot")
 
 	for _, exp := range expenses {
 		b.enrichAndAsk(ctx, chatID, exp)
@@ -197,6 +200,7 @@ func (b *Bot) handleApprovalAnswer(_ context.Context, chatID int64, state *pendi
 		b.sessions.clear(chatID)
 		b.returnDatabase(chatID)
 	case "no", "n", "cancel":
+		log.Info().Int64("chat_id", chatID).Msg("user discarded expense")
 		b.sessions.clear(chatID)
 		b.reply(chatID, "Discarded.")
 	default:
@@ -223,7 +227,9 @@ func (b *Bot) returnDatabase(chatID int64) {
 	if err := b.Sender.SendDocument(chatID, filepath.Base(path), data, "Saved. Here is your updated database."); err != nil {
 		log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to send database file back")
 		b.reply(chatID, "Saved, but I could not send the database file back. Please try again.")
+		return
 	}
+	log.Info().Int64("chat_id", chatID).Msg("returned database file to user")
 }
 
 // enrichAndAsk runs the enrichment loop for a single parsed expense and either asks the chat a
@@ -242,6 +248,7 @@ func (b *Bot) enrichAndAsk(ctx context.Context, chatID int64, exp llmparser.Expe
 			kind = pendingWallet
 		}
 		b.sessions.set(chatID, &pendingState{kind: kind, expense: exp})
+		log.Info().Int64("chat_id", chatID).Str("question", result.Question).Msg("asked additional info from user")
 		b.reply(chatID, result.Question)
 		return
 	}
@@ -251,6 +258,7 @@ func (b *Bot) enrichAndAsk(ctx context.Context, chatID int64, exp llmparser.Expe
 
 func (b *Bot) askApproval(chatID int64, enriched *handler.EnrichedExpense) {
 	b.sessions.set(chatID, &pendingState{kind: pendingApproval, enriched: enriched})
+	log.Info().Int64("chat_id", chatID).Msg("asked user for save approval")
 	b.reply(chatID, formatEnrichedExpense(enriched)+"\n\nSave this transaction? (yes/no)")
 }
 
