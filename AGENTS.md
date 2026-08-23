@@ -3,18 +3,19 @@
 ## Project goal
 
 A Go agent that automates personal expense tracking. It runs on a local machine and ties together: an LLM for parsing, a
-local SQLite database, Telegram bot (as a source of data about expenses), and Google Drive (for sync/backup).
+local SQLite database, Telegram bot (as a source of data about expenses).
 
 ## Core responsibilities
 
-- **Telegram bot** — agent connected to Telegram bot API, receives screenshots of bank SMS from a user, sends questions
-  or results back to the user.
+- **Telegram bot** — agent connected to Telegram bot API, receives an SQLite data file, screenshots of bank SMS from a
+  user, sends questions or results back to the user.
 - **LLM parsing** — send raw screenshots to a local LLM (via llama.cpp OpenAI-compatible API) and get back structured
   expense data (amount, currency, merchant, date, category, etc.).
-- **Google Drive sync** — sync the SQLite file to Google Drive (third-party backup of Cashew application).
 - **SQLite editor** — insert parsed data (expenses) into the database file.
-- **Finding a suitable topic** — find a suitable topic for the expense in the database or memory file (e.g., expense
-  with the same description in the database).
+- **Finding a suitable topic** — find a suitable topic for the expense in the database (e.g., expense with the same
+  description in the database) to provide additional context for the LLM, if the agent can't find exact matches.
+- **Memorizing** — keep track of matching kinds of expenses and categories, card numbers and bank accounts, specific
+  cases, etc. to learn more and more how to handle expenses.
 - **Duplicate/conflict handling** — before/after insert, detect duplicate entries (e.g., same expenses, same transaction
   twice) and resolve conflicts in the table.
 
@@ -30,7 +31,8 @@ together end-to-end.
       LLM calls
     - Context window: 128000 tokens
 - Storage: SQLite (single file)
-- External services: Telegram Bot API, Google Drive API
+- External services: Telegram Bot API
+- Agent memory: Postgres database
 - OS: Ubuntu 26.04
 
 Frameworks:
@@ -42,11 +44,11 @@ Frameworks:
 
 ## Architecture / project layout
 
+- Only one root command to run the agent as a daemon. Flag `--config` to provide path to the config file
 - bin/ - path to test binaries
 - cmd/agent/ - main entrypoint
 - internal/telegram/ - Telegram bot backend
 - internal/LLMparser/ - LLM prompt and parsing logic
-- internal/drivesync/ - Google Drive sync
 - internal/memory/ - Postgres-backed agent memory (learned topic/category/wallet mappings, bank account mappings,
   similarity search)
 - internal/handler/ - Enrichment loop: find suitable topics using memory/LLM, decide when to ask the user
@@ -60,8 +62,8 @@ Frameworks:
 - Implement logging with several log levels.
 - Write simple tests to cover critical paths.
 - Use linter to enforce code quality.
-- Secrets (Telegram bot token, Google OAuth credentials) and other parameters live in a YAML config file, never
-  hardcoded or committed.
+- Secrets (Telegram bot token, LLM API key) and other parameters live in a YAML config file, never hardcoded or
+  committed.
 
 ## LLM parsing notes
 
@@ -72,6 +74,6 @@ Frameworks:
 ## Known constraints / things to remember
 
 - LLM must parse images to extract SMS data about expenses.
-- SQLite file stored in Google Drive as a third-party backup of Cashew mobile app. To get or write it, it must use
-  information from the Cashew GitHub project.
-- Cashew mobile app GitHub repo: https://github.com/jameskokoska/Cashew
+- SQLite file must be received from the user before adding new expenses.
+- After changing an SQLite file, and getting an user approval, the agent must return the updated SQLite file to the user
+  in a Telegram message.
