@@ -394,17 +394,18 @@ func (b *Bot) processNext(ctx context.Context, chatID int64) {
 		exp := state.queue[0]
 		remaining := state.queue[1:]
 
-		var dbLookups []handler.DBLookup
-		if path, ok := b.databases.get(chatID); ok {
-			if db, err := b.OpenDatabase(path); err == nil {
-				defer db.Close()
-				dbLookups = append(dbLookups, db)
-			} else {
-				log.Warn().Err(err).Int64("chat_id", chatID).Msg("failed to open database file for candidate lookup")
+		result, err := func() (handler.Result, error) {
+			var dbLookups []handler.DBLookup
+			if path, ok := b.databases.get(chatID); ok {
+				if db, err := b.OpenDatabase(path); err == nil {
+					defer db.Close()
+					dbLookups = append(dbLookups, db)
+				} else {
+					log.Warn().Err(err).Int64("chat_id", chatID).Msg("failed to open database file for candidate lookup")
+				}
 			}
-		}
-
-		result, err := b.Enricher.Enrich(ctx, exp, dbLookups...)
+			return b.Enricher.Enrich(ctx, exp, dbLookups...)
+		}()
 		if err != nil {
 			log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to enrich expense")
 			b.reply(chatID, "Sorry, something went wrong while processing one of the transactions. Skipping it.")
