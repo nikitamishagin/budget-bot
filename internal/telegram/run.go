@@ -86,7 +86,7 @@ func Run(ctx context.Context, token string, bot *Bot) error {
 }
 
 // handleUpdate dispatches a single Telegram update to the appropriate Bot method, rejecting
-// messages from users not listed in the bot's allow-list, per TELEGRAM_GUIDELINES.md.
+// messages from users not listed in the bot's allowlist, per TELEGRAM_GUIDELINES.md.
 func handleUpdate(ctx context.Context, bot *Bot, sender Sender, update tgbotapi.Update) {
 	if update.Message == nil {
 		return
@@ -107,7 +107,7 @@ func handleUpdate(ctx context.Context, bot *Bot, sender Sender, update tgbotapi.
 	switch {
 	case msg.IsCommand():
 		log.Info().Str("username", username).Int64("chat_id", chatID).Str("command", msg.Command()).Msg("user sent command")
-		bot.HandleCommand(chatID, msg.Command())
+		bot.HandleCommand(ctx, chatID, msg.Command())
 	case msg.Document != nil:
 		log.Info().Str("username", username).Int64("chat_id", chatID).Str("file_name", msg.Document.FileName).Msg("received file from user")
 		data, err := sender.DownloadDocument(msg.Document.FileID)

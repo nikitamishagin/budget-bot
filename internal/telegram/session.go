@@ -17,16 +17,60 @@ const (
 	// pendingCategory means the bot is waiting for the user to name the category for a
 	// transaction the LLM could not confidently resolve.
 	pendingCategory
-	// pendingApproval means the bot is waiting for the user to confirm ("yes"/"no") that an
-	// already-enriched expense should be saved.
+	// pendingApproval means the bot is waiting for the user to confirm ("yes"/"no") that a whole
+	// batch of already-enriched expenses (parsed from every queued screenshot) should be saved,
+	// per AGENTS.md step 13.
 	pendingApproval
+	// pendingEditing means the bot rejected/discarded a batch (per AGENTS.md step 14) and is
+	// waiting for the user to either fix individual entries, approve the batch as-is, or discard
+	// it entirely.
+	pendingEditing
 )
 
 // pendingState tracks what a single chat is waiting for next.
 type pendingState struct {
-	kind     pendingKind
-	expense  llmparser.Expense
-	enriched *handler.EnrichedExpense
+	kind pendingKind
+	// expense is the raw parsed expense currently being enriched (kind == pendingWallet or
+	// pendingCategory).
+	expense llmparser.Expense
+	// queue holds the remaining raw expenses (from every queued screenshot) still waiting to be
+	// enriched, per AGENTS.md step 5 ("every image from the queue must be parsed one by one").
+	queue []llmparser.Expense
+	// batch accumulates every expense already enriched during the current /parse run, per
+	// AGENTS.md step 6 ("aggregates answers from llm [...] to one list").
+	batch []*handler.EnrichedExpense
+}
+
+// screenshots tracks, per chat, the raw image bytes waiting to be parsed once the user sends
+// /parse, per AGENTS.md steps 3-5 ("received screenshots must be saved to a queue").
+type screenshots struct {
+	mu    sync.Mutex
+	items map[int64][]screenshot
+}
+
+// screenshot is a single queued image, downloaded but not yet parsed.
+type screenshot struct {
+	data []byte
+	mime string
+}
+
+func newScreenshots() *screenshots {
+	return &screenshots{items: make(map[int64][]screenshot)}
+}
+
+func (s *screenshots) add(chatID int64, data []byte, mime string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.items[chatID] = append(s.items[chatID], screenshot{data: data, mime: mime})
+	return len(s.items[chatID])
+}
+
+func (s *screenshots) take(chatID int64) []screenshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := s.items[chatID]
+	delete(s.items, chatID)
+	return items
 }
 
 // sessions tracks per-chat pending state, guarded by a mutex since updates are processed

@@ -160,7 +160,7 @@ var _ = Describe("Bot.HandleCommand", func() {
 		sender := &fakeSender{}
 		bot := newTestBot(sender, &fakeParser{}, &fakeEnricher{}, newFakeAccounts(), []string{"alice"})
 
-		bot.HandleCommand(1, "start")
+		bot.HandleCommand(context.Background(), 1, "start")
 
 		Expect(sender.last()).To(ContainSubstring("Welcome"))
 	})
@@ -169,22 +169,33 @@ var _ = Describe("Bot.HandleCommand", func() {
 		sender := &fakeSender{}
 		bot := newTestBot(sender, &fakeParser{}, &fakeEnricher{}, newFakeAccounts(), []string{"alice"})
 
-		bot.HandleCommand(1, "whatever")
+		bot.HandleCommand(context.Background(), 1, "whatever")
 
 		Expect(sender.last()).To(ContainSubstring("Unknown command"))
 	})
 })
 
-var _ = Describe("Bot.HandlePhoto", func() {
-	It("asks for approval once the expense is fully enriched", func() {
+var _ = Describe("Bot.HandlePhoto and Bot.HandleParse", func() {
+	It("queues the screenshot instead of parsing it immediately", func() {
+		sender := &fakeSender{}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks", Amount: 9.5}}}
+		bot := newTestBot(sender, parser, &fakeEnricher{}, newFakeAccounts(), []string{"alice"})
+
+		bot.HandlePhoto(context.Background(), 1, []byte("fake-image"), "image/jpeg")
+
+		Expect(sender.last()).To(ContainSubstring("queued"))
+	})
+
+	It("asks for approval once every queued screenshot is parsed and enriched", func() {
 		sender := &fakeSender{}
 		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks", Amount: 9.5, CategoryFK: "cat-food", WalletFK: "wallet-main"}}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks", Amount: 9.5}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
-
 		bot.HandlePhoto(context.Background(), 1, []byte("fake-image"), "image/jpeg")
 
-		Expect(sender.last()).To(ContainSubstring("Save this transaction?"))
+		bot.HandleParse(context.Background(), 1)
+
+		Expect(sender.last()).To(ContainSubstring("Save these transactions?"))
 		Expect(sender.last()).To(ContainSubstring("Starbucks"))
 	})
 
@@ -193,20 +204,31 @@ var _ = Describe("Bot.HandlePhoto", func() {
 		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "Which wallet does account \"1234\" belong to?"}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Unknown Shop", Account: "1234"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
-
 		bot.HandlePhoto(context.Background(), 1, []byte("fake-image"), "image/jpeg")
+
+		bot.HandleParse(context.Background(), 1)
 
 		Expect(sender.last()).To(ContainSubstring("wallet"))
 	})
 
-	It("informs the user when the screenshot cannot be parsed", func() {
+	It("informs the user when a screenshot cannot be parsed and no transaction is found", func() {
 		sender := &fakeSender{}
 		parser := &fakeParser{err: assertError{}}
 		bot := newTestBot(sender, parser, &fakeEnricher{}, newFakeAccounts(), []string{"alice"})
-
 		bot.HandlePhoto(context.Background(), 1, []byte("fake-image"), "image/jpeg")
 
-		Expect(sender.last()).To(ContainSubstring("could not read"))
+		bot.HandleParse(context.Background(), 1)
+
+		Expect(sender.last()).To(ContainSubstring("could not find any transaction"))
+	})
+
+	It("complains when /parse is sent with nothing queued", func() {
+		sender := &fakeSender{}
+		bot := newTestBot(sender, &fakeParser{}, &fakeEnricher{}, newFakeAccounts(), []string{"alice"})
+
+		bot.HandleParse(context.Background(), 1)
+
+		Expect(sender.last()).To(ContainSubstring("No screenshots to parse"))
 	})
 })
 
@@ -227,12 +249,13 @@ var _ = Describe("Bot.HandleText", func() {
 		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Unknown Shop", Account: "1234"}}}
 		bot := newTestBot(sender, parser, enricher, accounts, []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+		bot.HandleParse(context.Background(), 1)
 
 		enricher.result = handler.Result{Expense: &handler.EnrichedExpense{Name: "Unknown Shop", CategoryFK: "cat-x", WalletFK: "wallet-main"}}
 		bot.HandleText(context.Background(), 1, "wallet-main")
 
 		Expect(accounts.wallets["1234"]).To(Equal("wallet-main"))
-		Expect(sender.last()).To(ContainSubstring("Save this transaction?"))
+		Expect(sender.last()).To(ContainSubstring("Save these transactions?"))
 	})
 
 	It("calls ResolveWithUserInput after the user names the category", func() {
@@ -243,13 +266,14 @@ var _ = Describe("Bot.HandleText", func() {
 		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Unknown Shop", Account: "1234"}}}
 		bot := newTestBot(sender, parser, enricher, accounts, []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+		bot.HandleParse(context.Background(), 1)
 
 		bot.HandleText(context.Background(), 1, "cat-groceries")
 
 		Expect(enricher.resolveCalls).To(Equal(1))
 		Expect(enricher.resolveArgs[1]).To(Equal("cat-groceries"))
 		Expect(enricher.resolveArgs[3]).To(Equal("wallet-main"))
-		Expect(sender.last()).To(ContainSubstring("Save this transaction?"))
+		Expect(sender.last()).To(ContainSubstring("Save these transactions?"))
 	})
 
 	It("sends the database file back once the user approves", func() {
@@ -258,6 +282,7 @@ var _ = Describe("Bot.HandleText", func() {
 		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+		bot.HandleParse(context.Background(), 1)
 
 		bot.HandleText(context.Background(), 1, "yes")
 
@@ -270,10 +295,11 @@ var _ = Describe("Bot.HandleText", func() {
 		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+		bot.HandleParse(context.Background(), 1)
 
 		bot.HandleText(context.Background(), 1, "no")
 
-		Expect(sender.last()).To(Equal("Discarded."))
+		Expect(sender.last()).To(ContainSubstring("unapproved data"))
 	})
 
 	It("re-asks when the approval answer is not yes/no", func() {
@@ -282,10 +308,46 @@ var _ = Describe("Bot.HandleText", func() {
 		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+		bot.HandleParse(context.Background(), 1)
 
 		bot.HandleText(context.Background(), 1, "maybe")
 
 		Expect(sender.last()).To(ContainSubstring("yes"))
+	})
+
+	It("allows editing a rejected batch and approving it afterwards", func() {
+		sender := &fakeSender{}
+		writer := newFakeWriter()
+		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks", CategoryFK: "cat-wrong", WalletFK: "wallet-1"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
+		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
+		bot.OpenDatabase = func(string) (ExpenseWriter, error) { return writer, nil }
+		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+		bot.HandleParse(context.Background(), 1)
+		bot.HandleText(context.Background(), 1, "no")
+
+		bot.HandleText(context.Background(), 1, "edit 1 category cat-coffee")
+		Expect(sender.last()).To(ContainSubstring("cat-coffee"))
+
+		bot.HandleText(context.Background(), 1, "approve")
+
+		Expect(writer.inserted).To(HaveLen(1))
+		Expect(writer.inserted[0].CategoryFK).To(Equal("cat-coffee"))
+		Expect(sender.sentDocs).To(Equal(1))
+	})
+
+	It("discards a rejected batch entirely on request", func() {
+		sender := &fakeSender{}
+		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
+		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
+		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+		bot.HandleParse(context.Background(), 1)
+		bot.HandleText(context.Background(), 1, "no")
+
+		bot.HandleText(context.Background(), 1, "discard")
+
+		Expect(sender.last()).To(Equal("Discarded."))
 	})
 })
 
@@ -315,7 +377,8 @@ var _ = Describe("Bot.HandleDocument", func() {
 		Expect(sender.last()).To(ContainSubstring("Database saved"))
 
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
-		Expect(sender.last()).To(ContainSubstring("Save this transaction?"))
+		bot.HandleParse(context.Background(), 1)
+		Expect(sender.last()).To(ContainSubstring("Save these transactions?"))
 	})
 
 	It("rejects a document that is not a valid SQLite database", func() {
@@ -341,6 +404,7 @@ var _ = Describe("Bot approval saving", func() {
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.OpenDatabase = func(string) (ExpenseWriter, error) { return writer, nil }
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+		bot.HandleParse(context.Background(), 1)
 
 		bot.HandleText(context.Background(), 1, "yes")
 
