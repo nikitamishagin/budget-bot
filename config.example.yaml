@@ -16,3 +16,7 @@ memory:
   sslmode: "disable"
   top_n: 5
   high_confidence_threshold: 0.9
+telegram:
+  token_file: "./telegram-bot-token"
+  allowed_usernames: []
+  db_path: "./data/databases"

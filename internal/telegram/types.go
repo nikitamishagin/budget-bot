@@ -1,0 +1,39 @@
+// Package telegram implements the agent's Telegram bot backend: it receives screenshots of bank
+// SMS from allowed users, runs them through the LLM parser and memory-backed enrichment, asks the
+// user for any missing information, and requests an approval before the resulting expense is
+// considered ready to be saved. See TELEGRAM_GUIDELINES.md for the overall flow this package
+// implements.
+package telegram
+
+import (
+	"context"
+
+	"github.com/nikitamishagin/budget-bot/internal/handler"
+	"github.com/nikitamishagin/budget-bot/internal/llmparser"
+)
+
+// ImageParser is the subset of *llmparser.Client the bot depends on.
+type ImageParser interface {
+	ParseImageBytes(ctx context.Context, imageData []byte, mimeType string) ([]llmparser.Expense, error)
+}
+
+// Enricher is the subset of *handler.Enricher the bot depends on.
+type Enricher interface {
+	Enrich(ctx context.Context, exp llmparser.Expense) (handler.Result, error)
+	ResolveWithUserInput(ctx context.Context, exp llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool) (*handler.EnrichedExpense, error)
+}
+
+// AccountResolver is the subset of memory.Store used to turn a user-supplied wallet answer into a
+// saved bank account -> wallet mapping.
+type AccountResolver interface {
+	ResolveAccount(ctx context.Context, accountPattern string) (string, bool, error)
+	SaveAccountMapping(ctx context.Context, accountPattern, walletFK string) error
+}
+
+// Sender is the subset of *tgbotapi.BotAPI the bot depends on, kept minimal for testability.
+type Sender interface {
+	SendMessage(chatID int64, text string) error
+	DownloadPhoto(fileID string) ([]byte, error)
+	DownloadDocument(fileID string) ([]byte, error)
+	SendDocument(chatID int64, filename string, data []byte, caption string) error
+}

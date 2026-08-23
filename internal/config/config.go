@@ -21,6 +21,16 @@ type LogConfig struct {
 	Level string `mapstructure:"level"`
 }
 
+// TelegramConfig holds settings for the Telegram bot backend.
+type TelegramConfig struct {
+	TokenFile string `mapstructure:"token_file"`
+	// AllowedUsernames lists the Telegram @usernames (without the leading "@", case-insensitive)
+	// that the bot will respond to.
+	AllowedUsernames []string `mapstructure:"allowed_usernames"`
+	// DBPath is the directory where SQLite database files uploaded by users are saved.
+	DBPath string `mapstructure:"db_path"`
+}
+
 // MemoryConfig holds settings for the Postgres-backed agent memory.
 type MemoryConfig struct {
 	Host                    string  `mapstructure:"host"`
@@ -35,9 +45,10 @@ type MemoryConfig struct {
 
 // Config is the root application configuration.
 type Config struct {
-	LLM    LLMConfig    `mapstructure:"llm"`
-	Log    LogConfig    `mapstructure:"log"`
-	Memory MemoryConfig `mapstructure:"memory"`
+	LLM      LLMConfig      `mapstructure:"llm"`
+	Log      LogConfig      `mapstructure:"log"`
+	Memory   MemoryConfig   `mapstructure:"memory"`
+	Telegram TelegramConfig `mapstructure:"telegram"`
 }
 
 // Load reads the configuration from the given YAML file path and applies defaults.
@@ -56,6 +67,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("memory.sslmode", "disable")
 	v.SetDefault("memory.top_n", 5)
 	v.SetDefault("memory.high_confidence_threshold", 0.9)
+	v.SetDefault("telegram.token_file", "./telegram-bot-token")
+	v.SetDefault("telegram.db_path", "./data/databases")
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read config file %q: %w", path, err)
@@ -95,6 +108,18 @@ func (c *Config) APIKey() (string, error) {
 	data, err := os.ReadFile(c.LLM.APIKeyFile)
 	if err != nil {
 		return "", fmt.Errorf("read api key file %q: %w", c.LLM.APIKeyFile, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// TelegramToken reads and returns the trimmed bot token from Telegram.TokenFile.
+func (c *Config) TelegramToken() (string, error) {
+	if strings.TrimSpace(c.Telegram.TokenFile) == "" {
+		return "", fmt.Errorf("telegram.token_file must not be empty")
+	}
+	data, err := os.ReadFile(c.Telegram.TokenFile)
+	if err != nil {
+		return "", fmt.Errorf("read telegram token file %q: %w", c.Telegram.TokenFile, err)
 	}
 	return strings.TrimSpace(string(data)), nil
 }
