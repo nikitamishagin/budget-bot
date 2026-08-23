@@ -75,5 +75,39 @@ Frameworks:
 
 - LLM must parse images to extract SMS data about expenses.
 - SQLite file must be received from the user before adding new expenses.
-- After changing an SQLite file, and getting an user approval, the agent must return the updated SQLite file to the user
+- After changing an SQLite file and getting a user approval, the agent must return the updated SQLite file to the user
   in a Telegram message.
+
+## The main loop
+
+1. The user sends an SQLite database file to the telegram bot.
+2. The agent receives the file and checks it. If it isn't an SQLite, the agent returns an error message about it. If
+   it's an SQLite, the agent saves the file to the data directory.
+3. The agent sends a message about waiting for screenshots from the user. On this step the user can send screenshots as
+   a group (multiple in one message) or one image at a time (step-by-step).
+4. When the user uploads all images, he enters `/parse` command. It means the agent can start parsing.
+5. Received screenshots must be saved to a queue. Every image from the queue must be parsed one by one.
+6. The agent aggregates answers from llm (raw sms data) to one list.
+7. The agent attempts to enrich the data to bring it to the expected structure. To do this, the agent finds exact
+   matches in memory (search topic and category by description, search wallet by card number). If exact matches are
+   found, the agent brings the data to the expected structure. Every element is handled one by one.
+8. If the agent doesn't find something, it attempts to find matches in the SQLite data file. If the agent didn't find
+   exact matches, it gets several best matches (fuzzy/substring) and exercises a request to llm.
+9. Llm attempts to compare received options from the request to define suitable title, category, and wallet. If it's
+   success, the agent enriches the element and saves new data to the memory.
+10. If llm didn't find really suitable options (not sure more than 90%), it prepares a message with a question about
+    this expense. (What is a topic and a category of this description, or what is a wallet name of this bank number.)
+    One unknown expense is one request to the user. The questions are asked gradually so that the user can answer them
+    calmly.
+11. The user answers with a topic, and category (e.g. "poppy coffee, coffee"), or wallet name (if an question about
+    wallets).
+12. The agent receives user answers, enriches unknown expense using these answers, saves new information (matches) into
+    the memory, and checks unknown expenses with the new saved data from the user (e.g., There are several expenses from
+    one unknown place. After the user answers about the first expense, the next expenses become known. Don't need to ask
+    again).
+13. When the list of all parsed expenses is prepared and enriched, the agent sends it to the user and asks an approval
+    (the message contains examples of answer). If the approval is received, the agent adds information to the SQLite
+    database file.
+14. If not, the agent saves the list as unapproved data, to allow the user to edit/fix it.
+15. If the SQLite database updated successfully, the agent sends the updated file to the user. The cycle is complete.
+16. To repeat this cycle the user must send a new SQLite database file.
