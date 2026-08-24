@@ -14,6 +14,11 @@ type LLMConfig struct {
 	APIKeyFile     string `mapstructure:"api_key_file"`
 	Model          string `mapstructure:"model"`
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
+	// MaxTokensParse/MaxTokensResolve cap generation length for image-parsing and topic-resolution
+	// requests respectively, so a misconfigured stop token can never hold the GPU forever (see
+	// llama-issue.md "Endless gpu loading").
+	MaxTokensParse   int `mapstructure:"max_tokens_parse"`
+	MaxTokensResolve int `mapstructure:"max_tokens_resolve"`
 }
 
 // LogConfig holds logging settings.
@@ -61,6 +66,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("llm.api_key_file", "./api-key")
 	v.SetDefault("llm.model", "config_qwen35-9b-nvfp4")
 	v.SetDefault("llm.timeout_seconds", 120)
+	v.SetDefault("llm.max_tokens_parse", 4096)
+	v.SetDefault("llm.max_tokens_resolve", 512)
 	v.SetDefault("log.level", "info")
 	v.SetDefault("memory.host", "127.0.0.1")
 	v.SetDefault("memory.port", 5432)

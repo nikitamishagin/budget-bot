@@ -12,19 +12,43 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
+)
+
+// stopSequence is Qwen's end-of-turn token. It is always sent explicitly as a safety net against
+// endless generation caused by misconfigured EOS/chat-template metadata in a quantized GGUF (see
+// llama-issue.md "Endless gpu loading").
+const stopSequence = "<|im_end|>"
+
+// defaultMaxTokensParse/defaultMaxTokensResolve cap generation length so a broken stop condition
+// can never run away past a bounded limit, per llama-issue.md.
+const (
+	defaultMaxTokensParse   = 4096
+	defaultMaxTokensResolve = 512
 )
 
 // Client talks to an OpenAI-compatible chat completions API that supports image inputs.
 type Client struct {
-	baseURL    string
-	apiKey     string
-	model      string
-	httpClient *http.Client
+	baseURL          string
+	apiKey           string
+	model            string
+	httpClient       *http.Client
+	maxTokensParse   int
+	maxTokensResolve int
 }
 
 // NewClient creates a Client for the given base URL (e.g. "http://127.0.0.1:8080/v1"),
-// API key, model name, and request timeout.
-func NewClient(baseURL, apiKey, model string, timeout time.Duration) *Client {
+// API key, model name, and request timeout. maxTokensParse/maxTokensResolve cap the number of
+// generated tokens for image parsing and topic resolution requests respectively; a value <= 0
+// falls back to a sane default.
+func NewClient(baseURL, apiKey, model string, timeout time.Duration, maxTokensParse, maxTokensResolve int) *Client {
+	if maxTokensParse <= 0 {
+		maxTokensParse = defaultMaxTokensParse
+	}
+	if maxTokensResolve <= 0 {
+		maxTokensResolve = defaultMaxTokensResolve
+	}
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
@@ -32,6 +56,8 @@ func NewClient(baseURL, apiKey, model string, timeout time.Duration) *Client {
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
+		maxTokensParse:   maxTokensParse,
+		maxTokensResolve: maxTokensResolve,
 	}
 }
 
@@ -55,7 +81,35 @@ type chatRequest struct {
 	Model       string        `json:"model"`
 	Messages    []chatMessage `json:"messages"`
 	Temperature float64       `json:"temperature"`
+	// Stop is always set to stopSequence as a safety net: even if the GGUF's own EOS metadata is
+	// misconfigured, the server must stop generating once it sees the model's real end-of-turn
+	// token, per llama-issue.md "Endless gpu loading".
+	Stop []string `json:"stop,omitempty"`
+	// MaxTokens bounds generation length so a broken stop condition can't run away past a bounded
+	// limit, per llama-issue.md "Endless gpu loading".
+	MaxTokens int `json:"max_tokens,omitempty"`
+	// TopP and TopK tune sampling determinism, see llama-issue.md "Tune llm request parameters".
+	// TopP is left unset (0) for our use cases since it has little effect at Temperature 0 anyway.
+	TopP float64 `json:"top_p,omitempty"`
+	TopK int     `json:"top_k,omitempty"`
+	// ResponseFormat asks llama.cpp for grammar-constrained JSON output instead of relying on
+	// prompt instructions alone, per llama-issue.md "Tune llm request parameters".
+	ResponseFormat *responseFormat `json:"response_format,omitempty"`
+	// ChatTemplateKwargs disables Qwen3's hybrid "thinking" mode for these single-shot
+	// classification/extraction tasks, per llama-issue.md "Tune llm request parameters".
+	ChatTemplateKwargs *chatTemplateKwargs `json:"chat_template_kwargs,omitempty"`
 }
+
+type responseFormat struct {
+	Type string `json:"type"`
+}
+
+type chatTemplateKwargs struct {
+	EnableThinking bool `json:"enable_thinking"`
+}
+
+var jsonResponseFormat = &responseFormat{Type: "json_object"}
+var thinkingOff = &chatTemplateKwargs{EnableThinking: false}
 
 type chatResponse struct {
 	Choices []struct {
@@ -99,7 +153,12 @@ func (c *Client) ParseImageBytes(ctx context.Context, imageData []byte, mimeType
 				},
 			},
 		},
-		Temperature: 0,
+		Temperature:        0,
+		Stop:               []string{stopSequence},
+		MaxTokens:          c.maxTokensParse,
+		TopK:               1,
+		ResponseFormat:     jsonResponseFormat,
+		ChatTemplateKwargs: thinkingOff,
 	}
 
 	content, err := c.chatCompletion(ctx, reqBody)
@@ -110,7 +169,9 @@ func (c *Client) ParseImageBytes(ctx context.Context, imageData []byte, mimeType
 }
 
 // chatCompletion sends a chat completion request and returns the raw text content of the first
-// choice in the response.
+// choice in the response. Per llama-issue.md "Not informative logs", it always logs the request
+// and the response status at info level, and additionally logs the full request/response bodies
+// at debug level for troubleshooting.
 func (c *Client) chatCompletion(ctx context.Context, reqBody chatRequest) (string, error) {
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -118,6 +179,10 @@ func (c *Client) chatCompletion(ctx context.Context, reqBody chatRequest) (strin
 	}
 
 	url := c.baseURL + "/chat/completions"
+	start := time.Now()
+	log.Info().Str("model", reqBody.Model).Int("max_tokens", reqBody.MaxTokens).Msg("sending llm request")
+	log.Debug().Str("url", url).RawJSON("request_body", body).Msg("llm request content")
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
@@ -129,6 +194,7 @@ func (c *Client) chatCompletion(ctx context.Context, reqBody chatRequest) (strin
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		log.Error().Err(err).Str("model", reqBody.Model).Dur("duration", time.Since(start)).Msg("llm request failed")
 		return "", fmt.Errorf("call llm: %w", err)
 	}
 	defer resp.Body.Close()
@@ -137,6 +203,11 @@ func (c *Client) chatCompletion(ctx context.Context, reqBody chatRequest) (strin
 	if err != nil {
 		return "", fmt.Errorf("read response: %w", err)
 	}
+
+	log.Info().Str("model", reqBody.Model).Int("status", resp.StatusCode).Dur("duration", time.Since(start)).Msg("received llm response")
+	// respBody is not guaranteed to be valid JSON (e.g. an upstream error page), so log it as a
+	// plain string rather than RawJSON to avoid a malformed-JSON logging error.
+	log.Debug().Str("response_body", string(respBody)).Msg("llm response content")
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("llm returned status %d: %s", resp.StatusCode, string(respBody))

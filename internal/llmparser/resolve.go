@@ -64,7 +64,12 @@ func (c *Client) ResolveTopic(ctx context.Context, expense Expense, candidates [
 			{Role: "system", Content: []contentPart{{Type: "text", Text: resolveSystemPrompt}}},
 			{Role: "user", Content: []contentPart{{Type: "text", Text: userMsg}}},
 		},
-		Temperature: 0,
+		Temperature:        0,
+		Stop:               []string{stopSequence},
+		MaxTokens:          c.maxTokensResolve,
+		TopK:               1,
+		ResponseFormat:     jsonResponseFormat,
+		ChatTemplateKwargs: thinkingOff,
 	}
 
 	content, err := c.chatCompletion(ctx, reqBody)
