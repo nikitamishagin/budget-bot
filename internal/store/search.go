@@ -22,16 +22,18 @@ type Candidate struct {
 	Count int
 }
 
-// FindExactMatch returns the most common enrichment used for transactions whose name matches
-// a topic exactly (case-insensitive), if any.
+// FindExactMatch returns the most common enrichment used for transactions whose raw SMS
+// description (note) or display name matches topic exactly (case-insensitive), if any. Matching
+// on note lets the raw description drive lookups per llama-issue.md "Using raw description from
+// sms data", while still falling back to name for transactions inserted before note was tracked.
 func (s *Store) FindExactMatch(ctx context.Context, topic string) (Candidate, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT name, category_fk, COALESCE(sub_category_fk, ''), wallet_fk, income, COUNT(*) AS c
 		FROM transactions
-		WHERE name = ? COLLATE NOCASE
+		WHERE note = ? COLLATE NOCASE OR name = ? COLLATE NOCASE
 		GROUP BY name, category_fk, sub_category_fk, wallet_fk, income
 		ORDER BY c DESC
-		LIMIT 1`, topic)
+		LIMIT 1`, topic, topic)
 
 	c, err := scanCandidate(row)
 	if err != nil {
@@ -43,10 +45,10 @@ func (s *Store) FindExactMatch(ctx context.Context, topic string) (Candidate, bo
 	return c, true, nil
 }
 
-// FindCandidates returns up to limit distinct enrichment combinations for transactions whose
-// name contains a topic as a case-insensitive substring, most frequently used first. It never
-// returns more than limit rows, so the SQLite file's contents are never dumped wholesale to the
-// caller (e.g., an LLM prompt).
+// FindCandidates returns up to limit distinct enrichment combinations for transactions whose raw
+// SMS description (note) or display name contains topic as a case-insensitive substring, most
+// frequently used first. It never returns more than limit rows, so the SQLite file's contents are
+// never dumped wholesale to the caller (e.g., an LLM prompt).
 func (s *Store) FindCandidates(ctx context.Context, topic string, limit int) ([]Candidate, error) {
 	if limit <= 0 {
 		limit = 5
@@ -55,10 +57,10 @@ func (s *Store) FindCandidates(ctx context.Context, topic string, limit int) ([]
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT name, category_fk, COALESCE(sub_category_fk, ''), wallet_fk, income, COUNT(*) AS c
 		FROM transactions
-		WHERE name LIKE '%' || ? || '%' COLLATE NOCASE
+		WHERE note LIKE '%' || ? || '%' COLLATE NOCASE OR name LIKE '%' || ? || '%' COLLATE NOCASE
 		GROUP BY name, category_fk, sub_category_fk, wallet_fk, income
 		ORDER BY c DESC
-		LIMIT ?`, topic, limit)
+		LIMIT ?`, topic, topic, limit)
 	if err != nil {
 		return nil, fmt.Errorf("find candidates: %w", err)
 	}

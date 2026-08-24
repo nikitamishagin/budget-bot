@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -186,6 +187,49 @@ var _ = Describe("Insert", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cands).To(HaveLen(1))
 		Expect(cands[0].Count).To(Equal(1))
+	})
+
+	It("stores amount with Cashew's sign convention and timestamps in Unix seconds", func() {
+		s, _ := newTestDB()
+		defer s.Close()
+
+		before := time.Now().Unix()
+		result, err := s.Insert(context.Background(), handler.EnrichedExpense{
+			Name:       "Starbucks",
+			Amount:     5.5,
+			CategoryFK: "cat-coffee",
+			WalletFK:   "wallet-1",
+			Date:       "2024-01-02T10:00:00Z",
+			Income:     false,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		var amount float64
+		var dateCreated int64
+		row := s.db.QueryRow(`SELECT amount, date_created FROM transactions WHERE transaction_pk = ?`, result.TransactionPK)
+		Expect(row.Scan(&amount, &dateCreated)).To(Succeed())
+
+		// Expenses (income=false) must be stored as a negative amount, per llama-issue.md "Data
+		// format in the sqlite database".
+		Expect(amount).To(Equal(-5.5))
+		// date_created must be a Unix-seconds epoch (10 digits, not milliseconds), matching the
+		// value implied by the RFC3339 exp.Date.
+		expected, _ := time.Parse(time.RFC3339, "2024-01-02T10:00:00Z")
+		Expect(dateCreated).To(Equal(expected.Unix()))
+		Expect(dateCreated).To(BeNumerically("<", before+86400)) // sane seconds-range, not millis
+
+		incomeResult, err := s.Insert(context.Background(), handler.EnrichedExpense{
+			Name:       "Salary",
+			Amount:     100,
+			CategoryFK: "cat-income",
+			WalletFK:   "wallet-1",
+			Date:       "2024-01-02T10:00:00Z",
+			Income:     true,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		var incomeAmount float64
+		Expect(s.db.QueryRow(`SELECT amount FROM transactions WHERE transaction_pk = ?`, incomeResult.TransactionPK).Scan(&incomeAmount)).To(Succeed())
+		Expect(incomeAmount).To(Equal(100.0))
 	})
 
 	It("does not treat a different day as a duplicate", func() {
