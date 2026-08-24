@@ -136,16 +136,16 @@ var _ = Describe("Store", func() {
 
 	Describe("SaveAccountMapping and ResolveAccount", func() {
 		It("returns not found for an unknown account", func() {
-			_, ok, err := store.ResolveAccount(ctx, "**** 1234")
+			_, ok, err := store.ResolveAccount(ctx, "**** 1234", "USD")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ok).To(BeFalse())
 		})
 
 		It("saves and resolves an account mapping", func() {
-			Expect(store.SaveAccountMapping(ctx, "**** 1234", "wallet-checking")).To(Succeed())
+			Expect(store.SaveAccountMapping(ctx, "**** 1234", "USD", "wallet-checking")).To(Succeed())
 
-			walletFK, ok, err := store.ResolveAccount(ctx, "**** 1234")
+			walletFK, ok, err := store.ResolveAccount(ctx, "**** 1234", "USD")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ok).To(BeTrue())
@@ -153,14 +153,29 @@ var _ = Describe("Store", func() {
 		})
 
 		It("updates the wallet when the mapping already exists", func() {
-			Expect(store.SaveAccountMapping(ctx, "**** 1234", "wallet-checking")).To(Succeed())
-			Expect(store.SaveAccountMapping(ctx, "**** 1234", "wallet-savings")).To(Succeed())
+			Expect(store.SaveAccountMapping(ctx, "**** 1234", "USD", "wallet-checking")).To(Succeed())
+			Expect(store.SaveAccountMapping(ctx, "**** 1234", "USD", "wallet-savings")).To(Succeed())
 
-			walletFK, ok, err := store.ResolveAccount(ctx, "**** 1234")
+			walletFK, ok, err := store.ResolveAccount(ctx, "**** 1234", "USD")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ok).To(BeTrue())
 			Expect(walletFK).To(Equal("wallet-savings"))
+		})
+
+		It("maps the same account to different wallets depending on currency", func() {
+			Expect(store.SaveAccountMapping(ctx, "TBC ****", "RSD", "wallet-rsd")).To(Succeed())
+			Expect(store.SaveAccountMapping(ctx, "TBC ****", "USD", "wallet-usd")).To(Succeed())
+
+			rsdWallet, ok, err := store.ResolveAccount(ctx, "TBC ****", "RSD")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ok).To(BeTrue())
+			Expect(rsdWallet).To(Equal("wallet-rsd"))
+
+			usdWallet, ok, err := store.ResolveAccount(ctx, "TBC ****", "USD")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ok).To(BeTrue())
+			Expect(usdWallet).To(Equal("wallet-usd"))
 		})
 	})
 })

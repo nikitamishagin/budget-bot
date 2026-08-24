@@ -148,12 +148,14 @@ func (s *Store) SaveTrainingPair(ctx context.Context, pair TrainingPair) error {
 	return nil
 }
 
-// ResolveAccount looks up the wallet a bank account/card identifier is mapped to. ok is false
-// when no mapping exists.
-func (s *Store) ResolveAccount(ctx context.Context, accountPattern string) (walletFK string, ok bool, err error) {
+// ResolveAccount looks up the wallet a bank account/card identifier and currency combination is
+// mapped to. Mappings are keyed by (account, currency) since a single card can produce expenses
+// in several currencies that must map to different wallets, per llama-issue.md "Wallet matching".
+// ok is false when no mapping exists.
+func (s *Store) ResolveAccount(ctx context.Context, accountPattern, currency string) (walletFK string, ok bool, err error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT wallet_fk FROM bank_account_mappings WHERE account_pattern = $1
-	`, accountPattern)
+		SELECT wallet_fk FROM bank_account_mappings WHERE account_pattern = $1 AND currency = $2
+	`, accountPattern, currency)
 
 	if err := row.Scan(&walletFK); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -164,8 +166,8 @@ func (s *Store) ResolveAccount(ctx context.Context, accountPattern string) (wall
 	return walletFK, true, nil
 }
 
-// SaveAccountMapping inserts or updates the wallet a bank account/card identifier maps to.
-func (s *Store) SaveAccountMapping(ctx context.Context, accountPattern, walletFK string) error {
+// SaveAccountMapping inserts or updates the wallet an (account, currency) combination maps to.
+func (s *Store) SaveAccountMapping(ctx context.Context, accountPattern, currency, walletFK string) error {
 	if strings.TrimSpace(accountPattern) == "" {
 		return fmt.Errorf("account pattern must not be empty")
 	}
@@ -174,12 +176,12 @@ func (s *Store) SaveAccountMapping(ctx context.Context, accountPattern, walletFK
 	}
 
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO bank_account_mappings (account_pattern, wallet_fk)
-		VALUES ($1, $2)
-		ON CONFLICT (account_pattern) DO UPDATE
+		INSERT INTO bank_account_mappings (account_pattern, currency, wallet_fk)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (account_pattern, currency) DO UPDATE
 		SET wallet_fk  = EXCLUDED.wallet_fk,
 		    updated_at = now()
-	`, accountPattern, walletFK)
+	`, accountPattern, currency, walletFK)
 	if err != nil {
 		return fmt.Errorf("save account mapping: %w", err)
 	}

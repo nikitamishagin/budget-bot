@@ -14,8 +14,11 @@ type MemoryStore interface {
 	FindBestMatch(ctx context.Context, topic string) (memory.Candidate, bool, error)
 	TopCandidates(ctx context.Context, topic string, n int) ([]memory.Candidate, error)
 	SaveTrainingPair(ctx context.Context, pair memory.TrainingPair) error
-	ResolveAccount(ctx context.Context, accountPattern string) (string, bool, error)
-	SaveAccountMapping(ctx context.Context, accountPattern, walletFK string) error
+	// ResolveAccount/SaveAccountMapping are keyed by (accountPattern, currency): a single card can
+	// produce expenses in several currencies that must map to different wallets, per
+	// llama-issue.md "Wallet matching".
+	ResolveAccount(ctx context.Context, accountPattern, currency string) (string, bool, error)
+	SaveAccountMapping(ctx context.Context, accountPattern, currency, walletFK string) error
 }
 
 // Resolver asks an LLM to match a parsed expense's topic against a short list of memory
@@ -86,7 +89,7 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		return Result{NeedsUserInput: true, Question: "I could not determine the merchant/counterparty for this transaction. What is it for?"}, nil
 	}
 
-	walletFK, walletKnown, err := e.resolveWallet(ctx, exp.Account)
+	walletFK, walletKnown, err := e.resolveWallet(ctx, exp.Account, exp.Currency)
 	if err != nil {
 		return Result{}, err
 	}
@@ -104,7 +107,7 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 	}
 
 	if !walletKnown {
-		return Result{NeedsUserInput: true, Question: fmt.Sprintf("Which wallet does account %q belong to?", exp.Account)}, nil
+		return Result{NeedsUserInput: true, Question: walletQuestion(exp.Account, exp.Currency)}, nil
 	}
 
 	candidates, err := e.Memory.TopCandidates(ctx, topic, e.TopN)
@@ -127,11 +130,10 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 	}
 
 	if resolution.NeedsUserInput || !resolution.Matched {
-		question := resolution.Question
-		if question == "" {
-			question = fmt.Sprintf("What category and wallet should I use for %q?", topic)
-		}
-		return Result{NeedsUserInput: true, Question: question}, nil
+		// Per llama-issue.md "Requests to user about expense name, category and wallet": the
+		// question must always quote the exact raw description from the SMS data (topic), so we
+		// build it ourselves rather than trusting the LLM's freeform question to include it.
+		return Result{NeedsUserInput: true, Question: nameAndCategoryQuestion(topic)}, nil
 	}
 
 	pair := memory.TrainingPair{
@@ -167,7 +169,7 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 	}
 
 	if account := strings.TrimSpace(exp.Account); account != "" {
-		if err := e.Memory.SaveAccountMapping(ctx, account, walletFK); err != nil {
+		if err := e.Memory.SaveAccountMapping(ctx, account, exp.Currency, walletFK); err != nil {
 			return nil, fmt.Errorf("save account mapping: %w", err)
 		}
 	}
@@ -190,18 +192,39 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 	return e.buildExpense(exp, pair, walletFK), nil
 }
 
-// resolveWallet resolves a bank account/card identifier from the SMS to a wallet, using the
-// static bank_account_mappings memory table.
-func (e *Enricher) resolveWallet(ctx context.Context, account string) (walletFK string, ok bool, err error) {
+// resolveWallet resolves a bank account/card identifier and currency from the SMS to a wallet,
+// using the static bank_account_mappings memory table. Currency is part of the lookup key
+// because a single card can produce expenses in several currencies, each mapped to a different
+// wallet, per llama-issue.md "Wallet matching".
+func (e *Enricher) resolveWallet(ctx context.Context, account, currency string) (walletFK string, ok bool, err error) {
 	account = strings.TrimSpace(account)
 	if account == "" {
 		return "", false, nil
 	}
-	walletFK, ok, err = e.Memory.ResolveAccount(ctx, account)
+	walletFK, ok, err = e.Memory.ResolveAccount(ctx, account, currency)
 	if err != nil {
 		return "", false, fmt.Errorf("resolve account: %w", err)
 	}
 	return walletFK, ok, nil
+}
+
+// nameAndCategoryQuestion builds the strictly-formatted question asked when the agent cannot
+// confidently determine an expense's name/category, per llama-issue.md "Requests to user about
+// expense name, category and wallet": it must always quote the exact raw description from the
+// SMS data.
+func nameAndCategoryQuestion(rawTopic string) string {
+	return fmt.Sprintf("What is the name of the %q expense, and what category does it belong to?", rawTopic)
+}
+
+// walletQuestion builds the question asked when the agent cannot resolve a bank account/card
+// number (and currency) to a known wallet, per llama-issue.md "Wallet matching": the currency is
+// included since the same card can map to different wallets depending on it (e.g. wallets named
+// "TBC * (RSD)" vs "TBC * (USD)").
+func walletQuestion(rawAccount, currency string) string {
+	if strings.TrimSpace(currency) == "" {
+		return fmt.Sprintf("Which wallet does account %q belong to?", rawAccount)
+	}
+	return fmt.Sprintf("Which wallet does account %q in %s belong to?", rawAccount, currency)
 }
 
 func (e *Enricher) buildExpense(exp llmparser.Expense, pair memory.TrainingPair, walletFK string) *EnrichedExpense {

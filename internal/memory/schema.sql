@@ -24,9 +24,19 @@ CREATE TABLE IF NOT EXISTS training_pairs (
 CREATE INDEX IF NOT EXISTS training_pairs_raw_topic_trgm_idx
     ON training_pairs USING gin (raw_topic gin_trgm_ops);
 
+-- Mappings are keyed by (account_pattern, currency), not just account_pattern: a single card can
+-- produce expenses in several currencies (e.g. "TBC * (RSD)" vs "TBC * (USD)"), and each must
+-- resolve to its own wallet, per llama-issue.md "Wallet matching".
 CREATE TABLE IF NOT EXISTS bank_account_mappings (
-    account_pattern TEXT PRIMARY KEY,
+    account_pattern TEXT NOT NULL,
+    currency        TEXT NOT NULL DEFAULT '',
     wallet_fk       TEXT NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (account_pattern, currency)
 );
+
+-- Migrate pre-existing deployments (created before the currency column existed) in place.
+ALTER TABLE bank_account_mappings ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT '';
+ALTER TABLE bank_account_mappings DROP CONSTRAINT IF EXISTS bank_account_mappings_pkey;
+ALTER TABLE bank_account_mappings ADD PRIMARY KEY (account_pattern, currency);

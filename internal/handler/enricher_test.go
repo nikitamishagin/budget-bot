@@ -57,14 +57,14 @@ func (f *fakeMemory) SaveTrainingPair(_ context.Context, pair memory.TrainingPai
 	return nil
 }
 
-func (f *fakeMemory) ResolveAccount(_ context.Context, accountPattern string) (string, bool, error) {
-	wallet, ok := f.accounts[accountPattern]
+func (f *fakeMemory) ResolveAccount(_ context.Context, accountPattern, currency string) (string, bool, error) {
+	wallet, ok := f.accounts[accountPattern+"|"+currency]
 	return wallet, ok, nil
 }
 
-func (f *fakeMemory) SaveAccountMapping(_ context.Context, accountPattern, walletFK string) error {
+func (f *fakeMemory) SaveAccountMapping(_ context.Context, accountPattern, currency, walletFK string) error {
 	f.saveAccounts++
-	f.accounts[accountPattern] = walletFK
+	f.accounts[accountPattern+"|"+currency] = walletFK
 	return nil
 }
 
@@ -103,7 +103,7 @@ var _ = Describe("Enricher.Enrich", func() {
 			Topic:   "Starbucks Coffee",
 			Date:    "2024-01-01",
 		}
-		mem.accounts["1234"] = "wallet-main"
+		mem.accounts["1234|"] = "wallet-main"
 	})
 
 	It("asks for clarification when parsing failed", func() {
@@ -186,7 +186,9 @@ var _ = Describe("Enricher.Enrich", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.NeedsUserInput).To(BeTrue())
-		Expect(result.Question).To(Equal("What category is this?"))
+		// The question is always built from the raw SMS topic, not the LLM's freeform text, per
+		// llama-issue.md "Requests to user about expense name, category and wallet".
+		Expect(result.Question).To(ContainSubstring(`"Starbucks Coffee"`))
 		Expect(mem.saveCalls).To(Equal(0)) // nothing saved for this expense
 	})
 })
@@ -206,7 +208,7 @@ var _ = Describe("Enricher.ResolveWithUserInput", func() {
 		Expect(mem.saveCalls).To(Equal(1))
 		Expect(mem.saveAccounts).To(Equal(1))
 
-		wallet, ok, err := mem.ResolveAccount(ctx, "5555")
+		wallet, ok, err := mem.ResolveAccount(ctx, "5555", "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ok).To(BeTrue())
 		Expect(wallet).To(Equal("wallet-savings"))
