@@ -33,10 +33,12 @@ type ExpenseWriter interface {
 }
 
 // AccountResolver is the subset of memory.Store used to turn a user-supplied wallet answer into a
-// saved bank account -> wallet mapping.
+// saved bank account -> wallet mapping. Mappings are keyed by (account, currency) since a single
+// card can produce expenses in several currencies that must map to different wallets, per
+// llama-issue.md "Wallet matching".
 type AccountResolver interface {
-	ResolveAccount(ctx context.Context, accountPattern string) (string, bool, error)
-	SaveAccountMapping(ctx context.Context, accountPattern, walletFK string) error
+	ResolveAccount(ctx context.Context, accountPattern, currency string) (string, bool, error)
+	SaveAccountMapping(ctx context.Context, accountPattern, currency, walletFK string) error
 }
 
 // Sender is the subset of *tgbotapi.BotAPI the bot depends on, kept minimal for testability.

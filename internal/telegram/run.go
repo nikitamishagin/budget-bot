@@ -128,7 +128,7 @@ func handleUpdate(ctx context.Context, bot *Bot, sender Sender, update tgbotapi.
 		}
 		bot.HandlePhoto(ctx, chatID, data, "image/jpeg")
 	case msg.Text != "":
-		log.Info().Str("username", username).Int64("chat_id", chatID).Msg("received text reply from user")
+		log.Info().Str("username", username).Int64("chat_id", chatID).Str("reply", msg.Text).Msg("received text reply from user")
 		bot.HandleText(ctx, chatID, msg.Text)
 	}
 }

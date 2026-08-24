@@ -123,13 +123,13 @@ func newFakeAccounts() *fakeAccounts {
 	return &fakeAccounts{wallets: map[string]string{}}
 }
 
-func (f *fakeAccounts) ResolveAccount(_ context.Context, accountPattern string) (string, bool, error) {
-	w, ok := f.wallets[accountPattern]
+func (f *fakeAccounts) ResolveAccount(_ context.Context, accountPattern, currency string) (string, bool, error) {
+	w, ok := f.wallets[accountPattern+"|"+currency]
 	return w, ok, nil
 }
 
-func (f *fakeAccounts) SaveAccountMapping(_ context.Context, accountPattern, walletFK string) error {
-	f.wallets[accountPattern] = walletFK
+func (f *fakeAccounts) SaveAccountMapping(_ context.Context, accountPattern, currency, walletFK string) error {
+	f.wallets[accountPattern+"|"+currency] = walletFK
 	return nil
 }
 
@@ -254,14 +254,14 @@ var _ = Describe("Bot.HandleText", func() {
 		enricher.result = handler.Result{Expense: &handler.EnrichedExpense{Name: "Unknown Shop", CategoryFK: "cat-x", WalletFK: "wallet-main"}}
 		bot.HandleText(context.Background(), 1, "wallet-main")
 
-		Expect(accounts.wallets["1234"]).To(Equal("wallet-main"))
+		Expect(accounts.wallets["1234|"]).To(Equal("wallet-main"))
 		Expect(sender.last()).To(ContainSubstring("Save these transactions?"))
 	})
 
 	It("calls ResolveWithUserInput after the user names the category", func() {
 		sender := &fakeSender{}
 		accounts := newFakeAccounts()
-		accounts.wallets["1234"] = "wallet-main"
+		accounts.wallets["1234|"] = "wallet-main"
 		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "What category and wallet should I use for \"Unknown Shop\"?"}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Unknown Shop", Account: "1234"}}}
 		bot := newTestBot(sender, parser, enricher, accounts, []string{"alice"})

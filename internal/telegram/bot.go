@@ -206,7 +206,7 @@ func (b *Bot) HandleText(ctx context.Context, chatID int64, text string) {
 func (b *Bot) handleWalletAnswer(ctx context.Context, chatID int64, state *pendingState, walletFK string) {
 	account := strings.TrimSpace(state.expense.Account)
 	if account != "" {
-		if err := b.Accounts.SaveAccountMapping(ctx, account, walletFK); err != nil {
+		if err := b.Accounts.SaveAccountMapping(ctx, account, state.expense.Currency, walletFK); err != nil {
 			log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to save account mapping")
 			b.reply(chatID, "Sorry, I could not save that. Please try again.")
 			return
@@ -221,7 +221,7 @@ func (b *Bot) handleWalletAnswer(ctx context.Context, chatID int64, state *pendi
 func (b *Bot) handleCategoryAnswer(ctx context.Context, chatID int64, state *pendingState, categoryFK string) {
 	walletFK := ""
 	if account := strings.TrimSpace(state.expense.Account); account != "" && b.Accounts != nil {
-		if wallet, ok, err := b.Accounts.ResolveAccount(ctx, account); err == nil && ok {
+		if wallet, ok, err := b.Accounts.ResolveAccount(ctx, account, state.expense.Currency); err == nil && ok {
 			walletFK = wallet
 		}
 	}
