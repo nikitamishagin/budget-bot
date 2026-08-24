@@ -89,17 +89,17 @@ Frameworks:
 5. Received screenshots must be saved to a queue. Every image from the queue must be parsed one by one.
 6. The agent aggregates answers from llm (raw sms data) to one list.
 7. The agent attempts to enrich the data to bring it to the expected structure. To do this, the agent finds exact
-   matches in memory (search topic and category by description, search wallet by card number). If exact matches are
+   matches in memory (search expense name and category by description, search wallet by card number). If exact matches are
    found, the agent brings the data to the expected structure. Every element is handled one by one.
 8. If the agent doesn't find something, it attempts to find matches in the SQLite data file. If the agent didn't find
    exact matches, it gets several best matches (fuzzy/substring) and exercises a request to llm.
 9. Llm attempts to compare received options from the request to define suitable title, category, and wallet. If it's
    success, the agent enriches the element and saves new data to the memory.
 10. If llm didn't find really suitable options (not sure more than 90%), it prepares a message with a question about
-    this expense. (What is a topic and a category of this description, or what is a wallet name of this bank number.)
+    this expense. (What is an expense name and a category of this description, or what is a wallet name of this bank number.)
     One unknown expense is one request to the user. The questions are asked gradually so that the user can answer them
     calmly.
-11. The user answers with a topic, and category (e.g. "poppy coffee, coffee"), or wallet name (if an question about
+11. The user answers with an expense name, and category (e.g. "poppy coffee, coffee"), or wallet name (if a question about
     wallets).
 12. The agent receives user answers, enriches unknown expense using these answers, saves new information (matches) into
     the memory, and checks unknown expenses with the new saved data from the user (e.g., There are several expenses from
