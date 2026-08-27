@@ -1,7 +1,6 @@
 // Package store gives the agent read/write access to a user's uploaded Cashew SQLite database
 // file: finding candidate categories/wallets already used for a similar transaction name, and
-// inserting new transactions with duplicate detection, per AGENTS.md's "SQLite editor" and
-// "Duplicate/conflict handling" responsibilities.
+// inserting new transactions with duplicate detection.
 package store
 
 import (

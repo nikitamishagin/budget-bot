@@ -9,9 +9,7 @@ import (
 
 // Candidate is a distinct (name, category, wallet, income) combination already present in the
 // transactions table of the user's SQLite file, used as a fallback source of enrichment
-// candidates when memory (internal/memory) has no match - see AGENTS.md step 8 of the main loop:
-// "If the agent doesn't find something [in memory], it attempts to find matches in the SQLite
-// data file [...] it gets several best matches (fuzzy/substring)".
+// candidates when memory (internal/memory) has no match.
 type Candidate struct {
 	Name          string
 	CategoryFK    string
@@ -24,8 +22,8 @@ type Candidate struct {
 
 // FindExactMatch returns the most common enrichment used for transactions whose raw SMS
 // description (note) or display name matches topic exactly (case-insensitive), if any. Matching
-// on note lets the raw description drive lookups per llama-issue.md "Using raw description from
-// sms data", while still falling back to name for transactions inserted before note was tracked.
+// on note lets the raw description drive lookups, while still falling back to name for
+// transactions inserted before note was tracked.
 func (s *Store) FindExactMatch(ctx context.Context, topic string) (Candidate, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT name, category_fk, COALESCE(sub_category_fk, ''), wallet_fk, income, COUNT(*) AS c

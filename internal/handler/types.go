@@ -1,7 +1,6 @@
 // Package handler ties together LLM parsing and agent memory: it enriches parsed SMS expenses
 // with the fields required by the Cashew schema (category, wallet, name, ...), consulting memory
-// first and only falling back to the LLM (and, ultimately, the user) when needed. See
-// MEMORY-GUIDELINES.md for the overall flow this package implements.
+// first and only falling back to the LLM (and, ultimately, the user) when needed.
 package handler
 
 // EnrichedExpense holds the fields required to insert a transaction into the Cashew schema,

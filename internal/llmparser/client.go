@@ -17,12 +17,11 @@ import (
 )
 
 // stopSequence is Qwen's end-of-turn token. It is always sent explicitly as a safety net against
-// endless generation caused by misconfigured EOS/chat-template metadata in a quantized GGUF (see
-// llama-issue.md "Endless gpu loading").
+// endless generation caused by misconfigured EOS/chat-template metadata in a quantized GGUF.
 const stopSequence = "<|im_end|>"
 
 // defaultMaxTokensParse/defaultMaxTokensResolve cap generation length so a broken stop condition
-// can never run away past a bounded limit, per llama-issue.md.
+// can never run away past a bounded limit.
 const (
 	defaultMaxTokensParse   = 4096
 	defaultMaxTokensResolve = 512
@@ -83,20 +82,20 @@ type chatRequest struct {
 	Temperature float64       `json:"temperature"`
 	// Stop is always set to stopSequence as a safety net: even if the GGUF's own EOS metadata is
 	// misconfigured, the server must stop generating once it sees the model's real end-of-turn
-	// token, per llama-issue.md "Endless gpu loading".
+	// token.
 	Stop []string `json:"stop,omitempty"`
 	// MaxTokens bounds generation length so a broken stop condition can't run away past a bounded
-	// limit, per llama-issue.md "Endless gpu loading".
+	// limit.
 	MaxTokens int `json:"max_tokens,omitempty"`
-	// TopP and TopK tune sampling determinism, see llama-issue.md "Tune llm request parameters".
-	// TopP is left unset (0) for our use cases since it has little effect at Temperature 0 anyway.
+	// TopP and TopK tune sampling determinism. TopP is left unset (0) for our use cases since it
+	// has little effect at Temperature 0 anyway.
 	TopP float64 `json:"top_p,omitempty"`
 	TopK int     `json:"top_k,omitempty"`
 	// ResponseFormat asks llama.cpp for grammar-constrained JSON output instead of relying on
-	// prompt instructions alone, per llama-issue.md "Tune llm request parameters".
+	// prompt instructions alone.
 	ResponseFormat *responseFormat `json:"response_format,omitempty"`
 	// ChatTemplateKwargs disables Qwen3's hybrid "thinking" mode for these single-shot
-	// classification/extraction tasks, per llama-issue.md "Tune llm request parameters".
+	// classification/extraction tasks.
 	ChatTemplateKwargs *chatTemplateKwargs `json:"chat_template_kwargs,omitempty"`
 }
 
@@ -169,9 +168,8 @@ func (c *Client) ParseImageBytes(ctx context.Context, imageData []byte, mimeType
 }
 
 // chatCompletion sends a chat completion request and returns the raw text content of the first
-// choice in the response. Per llama-issue.md "Not informative logs", it always logs the request
-// and the response status at info level, and additionally logs the full request/response bodies
-// at debug level for troubleshooting.
+// choice in the response. It always logs the request and the response status at info level, and
+// additionally logs the full request/response bodies at debug level for troubleshooting.
 func (c *Client) chatCompletion(ctx context.Context, reqBody chatRequest) (string, error) {
 	body, err := json.Marshal(reqBody)
 	if err != nil {

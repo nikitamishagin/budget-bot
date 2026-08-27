@@ -186,8 +186,7 @@ var _ = Describe("Enricher.Enrich", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.NeedsUserInput).To(BeTrue())
-		// The question is always built from the raw SMS description, not the LLM's freeform text, per
-		// llama-issue.md "Requests to user about expense name, category and wallet".
+		// The question is always built from the raw SMS description, not the LLM's freeform text.
 		Expect(result.Question).To(ContainSubstring(`"Starbucks Coffee"`))
 		Expect(mem.saveCalls).To(Equal(0)) // nothing saved for this expense
 	})

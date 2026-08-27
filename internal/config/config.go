@@ -15,8 +15,7 @@ type LLMConfig struct {
 	Model          string `mapstructure:"model"`
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
 	// MaxTokensParse/MaxTokensResolve cap generation length for image-parsing and topic-resolution
-	// requests respectively, so a misconfigured stop token can never hold the GPU forever (see
-	// llama-issue.md "Endless gpu loading").
+	// requests respectively, so a misconfigured stop token can never hold the GPU forever.
 	MaxTokensParse   int `mapstructure:"max_tokens_parse"`
 	MaxTokensResolve int `mapstructure:"max_tokens_resolve"`
 }

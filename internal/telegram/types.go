@@ -1,8 +1,7 @@
 // Package telegram implements the agent's Telegram bot backend: it receives screenshots of bank
 // SMS from allowed users, runs them through the LLM parser and memory-backed enrichment, asks the
 // user for any missing information, and requests an approval before the resulting expense is
-// considered ready to be saved. See TELEGRAM_GUIDELINES.md for the overall flow this package
-// implements.
+// considered ready to be saved.
 package telegram
 
 import (
@@ -34,8 +33,7 @@ type ExpenseWriter interface {
 
 // AccountResolver is the subset of memory.Store used to turn a user-supplied wallet answer into a
 // saved bank account -> wallet mapping. Mappings are keyed by (account, currency) since a single
-// card can produce expenses in several currencies that must map to different wallets, per
-// llama-issue.md "Wallet matching".
+// card can produce expenses in several currencies that must map to different wallets.
 type AccountResolver interface {
 	ResolveAccount(ctx context.Context, accountPattern, currency string) (string, bool, error)
 	SaveAccountMapping(ctx context.Context, accountPattern, currency, walletFK string) error

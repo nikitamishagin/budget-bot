@@ -38,7 +38,7 @@ Rules:
 const userPrompt = "Extract the expense data from every bank SMS message in this screenshot and return the JSON array as instructed."
 
 // resolveSystemPrompt instructs the model how to match a parsed expense's topic against a short
-// list of previously learned candidates from memory, per MEMORY-GUIDELINES.md.
+// list of previously learned candidates from memory.
 const resolveSystemPrompt = `You are an assistant that decides how to categorize a parsed bank transaction using a short list of previously learned matches from the agent's memory.
 
 You will be given a parsed expense and a small list of candidate previously learned topic -> category/wallet mappings (already pre-filtered by similarity, not the full memory table). Respond with ONLY a single JSON object (no markdown, no code fences) with exactly these fields:

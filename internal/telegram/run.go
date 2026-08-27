@@ -86,7 +86,7 @@ func Run(ctx context.Context, token string, bot *Bot) error {
 }
 
 // handleUpdate dispatches a single Telegram update to the appropriate Bot method, rejecting
-// messages from users not listed in the bot's allowlist, per TELEGRAM_GUIDELINES.md.
+// messages from users not listed in the bot's allowlist.
 func handleUpdate(ctx context.Context, bot *Bot, sender Sender, update tgbotapi.Update) {
 	if update.Message == nil {
 		return

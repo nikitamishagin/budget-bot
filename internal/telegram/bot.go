@@ -23,15 +23,14 @@ Commands:
 /parse - process every screenshot sent so far`
 
 // Bot wires the Telegram frontend to the LLM parser and the memory-backed enrichment loop. It
-// only reacts to messages from users listed in AllowedUsernames, per TELEGRAM_GUIDELINES.md.
+// only reacts to messages from users listed in AllowedUsernames.
 type Bot struct {
 	Sender           Sender
 	Parser           ImageParser
 	Enricher         Enricher
 	Accounts         AccountResolver
 	AllowedUsernames map[string]bool
-	// DBDir is the directory (from config) where uploaded SQLite database files are saved, per
-	// TELEGRAM_GUIDELINES.md.
+	// DBDir is the directory (from config) where uploaded SQLite database files are saved.
 	DBDir string
 	// OpenDatabase opens the SQLite database file uploaded by a chat; defaults to openStore, and
 	// is a field mainly, so tests can substitute a fake ExpenseWriter.
@@ -41,9 +40,9 @@ type Bot struct {
 	screenshots  *screenshots
 }
 
-// NewBot creates a Bot. allowedUsernames may be empty, in which case every user is rejected -
-// TELEGRAM_GUIDELINES.md requires the bot to only handle requests from users defined in config.
-// Usernames are matched case-insensitively and may be given with or without a leading "@".
+// NewBot creates a Bot. allowedUsernames may be empty, in which case every user is rejected: the
+// bot only handles requests from users defined in config. Usernames are matched
+// case-insensitively and may be given with or without a leading "@".
 func NewBot(sender Sender, parser ImageParser, enricher Enricher, accounts AccountResolver, allowedUsernames []string, dbDir string) *Bot {
 	allowed := make(map[string]bool, len(allowedUsernames))
 	for _, name := range allowedUsernames {
@@ -90,9 +89,8 @@ func (b *Bot) HandleCommand(ctx context.Context, chatID int64, command string) {
 }
 
 // HandleDocument saves an uploaded SQLite database file for the chat and unlocks screenshot
-// processing, per TELEGRAM_GUIDELINES.md step 3-4 of the common communication flow. If the file
-// is not a valid Cashew SQLite database, it is rejected with an error message, per AGENTS.md step
-// 2 ("If it isn't an SQLite, the agent returns an error message about it").
+// processing. If the file is not a valid Cashew SQLite database, it is rejected with an error
+// message.
 func (b *Bot) HandleDocument(chatID int64, fileName string, data []byte) {
 	if err := os.MkdirAll(b.DBDir, 0o755); err != nil {
 		log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to create database directory")
@@ -125,9 +123,8 @@ func (b *Bot) HandleDocument(chatID int64, fileName string, data []byte) {
 	b.reply(chatID, "Database saved. Now send me screenshots of your bank SMS about expenses.")
 }
 
-// HandlePhoto queues a downloaded screenshot for later processing, per AGENTS.md steps 3-5
-// ("received screenshots must be saved to a queue [...] every image from the queue must be
-// parsed one by one"). Screenshots are not parsed until the user sends /parse.
+// HandlePhoto queues a downloaded screenshot for later processing; screenshots are not parsed
+// until the user sends /parse.
 func (b *Bot) HandlePhoto(_ context.Context, chatID int64, imageData []byte, mimeType string) {
 	if _, ok := b.databases.get(chatID); !ok {
 		b.reply(chatID, "Please send your SQLite database file first, then I can process screenshots.")
@@ -140,7 +137,7 @@ func (b *Bot) HandlePhoto(_ context.Context, chatID int64, imageData []byte, mim
 }
 
 // HandleParse parses every screenshot queued so far, aggregates the resulting expenses into a
-// single list, and starts enriching them one by one, per AGENTS.md steps 4-6.
+// single list, and starts enriching them one by one.
 func (b *Bot) HandleParse(ctx context.Context, chatID int64) {
 	if _, ok := b.databases.get(chatID); !ok {
 		b.reply(chatID, "Please send your SQLite database file first, then I can process screenshots.")
@@ -298,8 +295,7 @@ func (b *Bot) handleApprovalAnswer(ctx context.Context, chatID int64, state *pen
 	}
 }
 
-// handleEditingAnswer lets the user fix individual entries of a previously rejected batch, per
-// AGENTS.md step 14 ("saves the list as unapproved data, to allow the user to edit/fix it"), or
+// handleEditingAnswer lets the user fix individual entries of a previously rejected batch, or
 // approve/discard it once satisfied.
 func (b *Bot) handleEditingAnswer(ctx context.Context, chatID int64, state *pendingState, answer string) {
 	switch {
@@ -355,9 +351,8 @@ func (b *Bot) applyEdit(chatID int64, state *pendingState, command string) {
 	b.reply(chatID, "Updated.\n\n"+formatBatch(state.batch)+"\n\nReply \"approve\" to save, keep editing, or \"discard\".")
 }
 
-// saveBatch inserts every expense in a batch into the chat's SQLite database file, per AGENTS.md's
-// "SQLite editor" responsibility, skipping any duplicate entries (but not treating them as an
-// error) per "Duplicate/conflict handling".
+// saveBatch inserts every expense in a batch into the chat's SQLite database file, skipping any
+// duplicate entries (but not treating them as an error).
 func (b *Bot) saveBatch(ctx context.Context, chatID int64, batch []*handler.EnrichedExpense) error {
 	path, ok := b.databases.get(chatID)
 	if !ok {
@@ -384,8 +379,8 @@ func (b *Bot) saveBatch(ctx context.Context, chatID int64, batch []*handler.Enri
 	return nil
 }
 
-// returnDatabase sends the chat's saved SQLite database file back, per TELEGRAM_GUIDELINES.md:
-// "After the approval is granted, the agent returns an updated SQLite database file to the user."
+// returnDatabase sends the chat's saved SQLite database file back to the user, once the batch
+// has been approved and saved.
 func (b *Bot) returnDatabase(chatID int64) {
 	path, ok := b.databases.get(chatID)
 	if !ok {
@@ -410,8 +405,8 @@ func (b *Bot) returnDatabase(chatID int64) {
 
 // processNext enriches the next raw expense in the chat's pending queue, aggregating results
 // into its batch, and either asks a follow-up question (setting the appropriate pendingWallet or
-// pendingCategory state) or moves on to the next queued expense, per AGENTS.md steps 7-9. Once
-// the queue is empty, it asks the chat to approve the whole aggregated batch, per step 13.
+// pendingCategory state) or moves on to the next queued expense. Once the queue is empty, it asks
+// the chat to approve the whole aggregated batch.
 func (b *Bot) processNext(ctx context.Context, chatID int64) {
 	state, ok := b.sessions.get(chatID)
 	if !ok {
@@ -460,7 +455,7 @@ func (b *Bot) processNext(ctx context.Context, chatID int64) {
 }
 
 // askBatchApproval asks the chat to approve saving every expense aggregated during the current
-// /parse run, per AGENTS.md step 13.
+// /parse run.
 func (b *Bot) askBatchApproval(chatID int64, batch []*handler.EnrichedExpense) {
 	if len(batch) == 0 {
 		b.sessions.clear(chatID)

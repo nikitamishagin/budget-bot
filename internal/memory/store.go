@@ -1,7 +1,7 @@
 // Package memory implements the agent's Postgres-backed memory: learned mappings from raw SMS
 // topics to enriched expense data, and static bank account -> wallet mappings. It provides
 // exact/high-confidence matching (to skip the LLM entirely) and top-N fuzzy candidate search (to
-// keep LLM context small), as described in MEMORY-GUIDELINES.md.
+// keep LLM context small).
 package memory
 
 import (
@@ -150,8 +150,7 @@ func (s *Store) SaveTrainingPair(ctx context.Context, pair TrainingPair) error {
 
 // ResolveAccount looks up the wallet a bank account/card identifier and currency combination is
 // mapped to. Mappings are keyed by (account, currency) since a single card can produce expenses
-// in several currencies that must map to different wallets, per llama-issue.md "Wallet matching".
-// ok is false when no mapping exists.
+// in several currencies that must map to different wallets. ok is false when no mapping exists.
 func (s *Store) ResolveAccount(ctx context.Context, accountPattern, currency string) (walletFK string, ok bool, err error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT wallet_fk FROM bank_account_mappings WHERE account_pattern = $1 AND currency = $2

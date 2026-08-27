@@ -24,12 +24,10 @@ const (
 	// subcategory for a transaction the LLM could not confidently resolve.
 	pendingSubCategory
 	// pendingApproval means the bot is waiting for the user to confirm ("yes"/"no") that a whole
-	// batch of already-enriched expenses (parsed from every queued screenshot) should be saved,
-	// per AGENTS.md step 13.
+	// batch of already-enriched expenses (parsed from every queued screenshot) should be saved.
 	pendingApproval
-	// pendingEditing means the bot rejected/discarded a batch (per AGENTS.md step 14) and is
-	// waiting for the user to either fix individual entries, approve the batch as-is, or discard
-	// it entirely.
+	// pendingEditing means the bot rejected/discarded a batch and is waiting for the user to
+	// either fix individual entries, approve the batch as-is, or discard it entirely.
 	pendingEditing
 )
 
@@ -44,15 +42,14 @@ type pendingState struct {
 	name       string
 	categoryFK string
 	// queue holds the remaining raw expenses (from every queued screenshot) still waiting to be
-	// enriched, per AGENTS.md step 5 ("every image from the queue must be parsed one by one").
+	// enriched, one at a time.
 	queue []llmparser.Expense
-	// batch accumulates every expense already enriched during the current /parse run, per
-	// AGENTS.md step 6 ("aggregates answers from llm [...] to one list").
+	// batch accumulates every expense already enriched during the current /parse run.
 	batch []*handler.EnrichedExpense
 }
 
 // screenshots tracks, per chat, the raw image bytes waiting to be parsed once the user sends
-// /parse, per AGENTS.md steps 3-5 ("received screenshots must be saved to a queue").
+// /parse.
 type screenshots struct {
 	mu    sync.Mutex
 	items map[int64][]screenshot
@@ -113,9 +110,8 @@ func (s *sessions) clear(chatID int64) {
 	delete(s.state, chatID)
 }
 
-// databases tracks, per chat, the local path of the SQLite database file the user uploaded.
-// TELEGRAM_GUIDELINES.md requires the agent to receive this file before it will process any
-// screenshots.
+// databases tracks, per chat, the local path of the SQLite database file the user uploaded. The
+// agent must receive this file before it will process any screenshots.
 type databases struct {
 	mu    sync.Mutex
 	paths map[int64]string

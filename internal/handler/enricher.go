@@ -15,8 +15,7 @@ type MemoryStore interface {
 	TopCandidates(ctx context.Context, description string, n int) ([]memory.Candidate, error)
 	SaveTrainingPair(ctx context.Context, pair memory.TrainingPair) error
 	// ResolveAccount / SaveAccountMapping are keyed by (accountPattern, currency): a single card can
-	// produce expenses in several currencies that must map to different wallets, per
-	// llama-issue.md "Wallet matching".
+	// produce expenses in several currencies that must map to different wallets.
 	ResolveAccount(ctx context.Context, accountPattern, currency string) (string, bool, error)
 	SaveAccountMapping(ctx context.Context, accountPattern, currency, walletFK string) error
 }
@@ -28,9 +27,9 @@ type Resolver interface {
 }
 
 // DBLookup finds fallback enrichment candidates directly in the user's SQLite database file,
-// used when memory (Postgres) has no candidates for a description - see AGENTS.md step 8 of the main
-// loop: "If the agent doesn't find something [in memory], it attempts to find matches in the
-// SQLite data file [...] it gets several best matches (fuzzy/substring)".
+// used when memory (Postgres) has no candidates for a description: if no exact match is found in
+// memory, the agent falls back to searching the SQLite data file for several best (fuzzy/substring)
+// matches.
 type DBLookup interface {
 	FindCandidates(ctx context.Context, description string, limit int) ([]DBCandidate, error)
 }
@@ -46,7 +45,7 @@ type DBCandidate struct {
 }
 
 // Enricher enriches parsed expenses with the fields required by the Cashew schema, consulting
-// memory first (per MEMORY-GUIDELINES.md) and only calling the LLM/user when needed.
+// memory first and only calling the LLM/user when needed.
 type Enricher struct {
 	Memory                  MemoryStore
 	Resolver                Resolver
@@ -73,8 +72,7 @@ func NewEnricher(store MemoryStore, resolver Resolver, topN int, highConfidenceT
 // Enrich turns a parsed llmparser.Expense into an EnrichedExpense ready to insert, or into a
 // Result asking the user for missing information. It never calls the LLM when a high-confidence
 // memory match already exists, and it never passes more than TopN candidates to the LLM. An
-// optional DBLookup (db) is consulted as a fallback candidate source, when memory has none, per
-// AGENTS.md step 8.
+// optional DBLookup (db) is consulted as a fallback candidate source, when memory has none.
 func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLookup) (Result, error) {
 	if exp.ParseFailed {
 		reason := exp.FailureReason
@@ -130,9 +128,8 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 	}
 
 	if resolution.NeedsUserInput || !resolution.Matched {
-		// Per llama-issue.md "Requests to user about expense name, category and wallet": the
-		// question must always quote the exact raw description from the SMS data (description), so we
-		// build it ourselves rather than trusting the LLM's freeform question to include it. Name,
+		// The question must always quote the exact raw description from the SMS data (description), so
+		// we build it ourselves rather than trusting the LLM's freeform question to include it. Name,
 		// category and subcategory are then asked one at a time by the caller (see
 		// internal/telegram/bot.go processNext/handleNameAnswer/handleCategoryAnswer).
 		return Result{NeedsUserInput: true, Question: NameQuestion(description)}, nil
@@ -162,9 +159,9 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 }
 
 // ResolveWithUserInput records the user-supplied enrichment fields for a previously ambiguous
-// expense into memory and returns the now-complete EnrichedExpense. This closes the loop
-// described in MEMORY-GUIDELINES.md: any decision made (by the LLM or the user) flows back into
-// memory, so the same description/account is recognized automatically next time.
+// expense into memory and returns the now-complete EnrichedExpense. Any decision made (by the LLM
+// or the user) flows back into memory, so the same description/account is recognized automatically
+// next time.
 func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool) (*EnrichedExpense, error) {
 	if categoryFK == "" || walletFK == "" {
 		return nil, fmt.Errorf("category_fk and wallet_fk are required")
@@ -197,7 +194,7 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 // resolveWallet resolves a bank account/card identifier and currency from the SMS to a wallet,
 // using the static bank_account_mappings memory table. Currency is part of the lookup key
 // because a single card can produce expenses in several currencies, each mapped to a different
-// wallet, per llama-issue.md "Wallet matching".
+// wallet.
 func (e *Enricher) resolveWallet(ctx context.Context, account, currency string) (walletFK string, ok bool, err error) {
 	account = strings.TrimSpace(account)
 	if account == "" {
@@ -211,10 +208,9 @@ func (e *Enricher) resolveWallet(ctx context.Context, account, currency string) 
 }
 
 // NameQuestion builds the strictly formatted question asked when the agent cannot confidently
-// determine an expense's name/category/subcategory, per llama-issue.md "Requests to user about
-// expense name, category, and wallet": it must always quote the exact raw description from the
-// SMS data. Category and subcategory are asked separately afterward, see CategoryQuestion and
-// SubCategoryQuestion.
+// determine an expense's name/category/subcategory: it must always quote the exact raw
+// description from the SMS data. Category and subcategory are asked separately afterward, see
+// CategoryQuestion and SubCategoryQuestion.
 func NameQuestion(rawDesc string) string {
 	return fmt.Sprintf("What is the name of the %q expense?", rawDesc)
 }
@@ -231,9 +227,8 @@ func SubCategoryQuestion(rawDesc string) string {
 }
 
 // walletQuestion builds the question asked when the agent cannot resolve a bank account/card
-// number (and currency) to a known wallet, per llama-issue.md "Wallet matching": the currency is
-// included since the same card can map to different wallets depending on it (e.g., wallets named
-// "TBC * (RSD)" vs. "TBC * (USD)").
+// number (and currency) to a known wallet: the currency is included since the same card can map
+// to different wallets depending on it (e.g., wallets named "TBC * (RSD)" vs. "TBC * (USD)").
 func walletQuestion(rawAccount, currency string) string {
 	if strings.TrimSpace(currency) == "" {
 		return fmt.Sprintf("Which wallet does account %q belong to?", rawAccount)

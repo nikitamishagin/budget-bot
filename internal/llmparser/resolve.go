@@ -41,8 +41,8 @@ type Resolution struct {
 
 // ResolveTopic asks the LLM to match a parsed expense's topic against a short list of previously
 // learned candidates, or otherwise say that the user needs to be asked for missing information.
-// The candidates slice is expected to already be a short, pre-filtered top-N list (see
-// MEMORY-GUIDELINES.md): the full memory table must never be passed here.
+// The candidates slice is expected to already be a short, pre-filtered top-N list: the full
+// memory table must never be passed here.
 func (c *Client) ResolveTopic(ctx context.Context, expense Expense, candidates []Candidate) (Resolution, error) {
 	candidatesJSON, err := json.Marshal(candidates)
 	if err != nil {

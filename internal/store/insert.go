@@ -26,23 +26,21 @@ type InsertResult struct {
 
 // Insert adds exp as a new row in the "transactions" table. Before inserting, it checks whether a
 // transaction with the same wallet, amount, name and date (same calendar day) already exists; if
-// so, it reports the duplicate and inserts nothing, per AGENTS.md's "Duplicate/conflict handling"
-// responsibility ("detect duplicate entries [...] and resolve conflicts").
+// so, it reports the duplicate and inserts nothing.
 func (s *Store) Insert(ctx context.Context, exp handler.EnrichedExpense) (InsertResult, error) {
-	// Cashew stores all timestamp columns as Unix seconds (not milliseconds), per
-	// llama-issue.md "Data format in the sqlite database" - verified against a real exported
-	// Cashew database, whose date_created values are 10-digit second-epoch timestamps.
+	// Cashew stores all timestamp columns as Unix seconds (not milliseconds) - verified against a
+	// real exported Cashew database, whose date_created values are 10-digit second-epoch
+	// timestamps.
 	dateSeconds := parseExpenseDate(exp.Date)
 
-	// signedAmount stores the amount as Cashew does: negative for expenses, positive for income,
-	// per llama-issue.md "Data format in the sqlite database".
+	// signedAmount stores the amount as Cashew does: negative for expenses, positive for income.
 	signedAmount := exp.Amount
 	if !exp.Income {
 		signedAmount = -signedAmount
 	}
 
-	// Per llama-issue.md "Not informative logs": log the JSON data of the expense being inserted,
-	// so a failed/duplicate/successful write can always be traced back to what was attempted.
+	// Log the JSON data of the expense being inserted, so a failed/duplicate/successful write can
+	// always be traced back to what was attempted.
 	if expJSON, err := json.Marshal(exp); err == nil {
 		log.Info().RawJSON("expense", expJSON).Msg("inserting expense into database")
 	} else {
@@ -64,9 +62,9 @@ func (s *Store) Insert(ctx context.Context, exp handler.EnrichedExpense) (Insert
 		subCategory = sql.NullString{String: exp.SubCategoryFK, Valid: true}
 	}
 
-	// note stores the raw SMS description (exp.RawTopic), per llama-issue.md "Using raw
-	// description from sms data": it must be kept in the database as the transaction's note, both
-	// for user reference and so future lookups (FindExactMatch/FindCandidates) can match on it.
+	// note stores the raw SMS description (exp.RawTopic): it must be kept in the database as the
+	// transaction's note, both for user reference and so future lookups
+	// (FindExactMatch/FindCandidates) can match on it.
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO transactions (
 			transaction_pk, name, amount, note, category_fk, sub_category_fk, wallet_fk,
@@ -114,8 +112,8 @@ func dayBounds(seconds int64) (start, end int64) {
 }
 
 // parseExpenseDate parses a llmparser.Expense.Date (RFC3339 "if determinable, otherwise
-// as-is") into a second epoch timestamp (Cashew's convention, see llama-issue.md "Data format
-// in the sqlite database"), falling back to now when it cannot be parsed.
+// as-is") into a second epoch timestamp (Cashew's convention), falling back to now when it
+// cannot be parsed.
 func parseExpenseDate(date string) int64 {
 	if t, err := time.Parse(time.RFC3339, date); err == nil {
 		return t.Unix()

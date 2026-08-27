@@ -209,8 +209,7 @@ var _ = Describe("Insert", func() {
 		row := s.db.QueryRow(`SELECT amount, date_created FROM transactions WHERE transaction_pk = ?`, result.TransactionPK)
 		Expect(row.Scan(&amount, &dateCreated)).To(Succeed())
 
-		// Expenses (income=false) must be stored as a negative amount, per llama-issue.md "Data
-		// format in the sqlite database".
+		// Expenses (income=false) must be stored as a negative amount.
 		Expect(amount).To(Equal(-5.5))
 		// date_created must be a Unix-seconds epoch (10 digits, not milliseconds), matching the
 		// value implied by the RFC3339 exp.Date.
