@@ -2,31 +2,28 @@
 
 ## Project goal
 
-A Go agent that automates personal expense tracking. It runs on a local machine and ties together: an LLM for parsing, a
-local SQLite database, Telegram bot (as a source of data about expenses).
+Expense Agent is a Go daemon that automates personal expense tracking. It runs on a local machine and ties together: an
+LLM for parsing, a local SQLite database, Telegram bot (as a source of data about expenses).
 
 ## Core responsibilities
 
-- **Telegram bot** — agent connected to Telegram bot API, receives an SQLite data file, screenshots of bank SMS from a
-  user, sends questions or results back to the user.
-- **LLM parsing** — send raw screenshots to a local LLM (via llama.cpp OpenAI-compatible API) and get back structured
-  expense data (amount, currency, merchant, date, category, etc.).
-- **SQLite editor** — insert parsed data (expenses) into the database file.
-- **Finding a suitable topic** — find a suitable topic for the expense in the database (e.g., expense with the same
+- Telegram bot — agent connected to Telegram bot API, receives an SQLite data file, screenshots from the user, sends
+  questions or results back to the user.
+- LLM parsing — sends raw screenshots to a local LLM (via llama.cpp OpenAI-compatible API) and gets back structured
+  expense data (amount, currency, merchant, date, card number).
+- SQLite editor — reads data from the database file, inserts the new data (expenses) into the database file.
+- Finding a suitable topic — find a suitable topic for the expense in the database (e.g., expense with the same
   description in the database) to provide additional context for the LLM, if the agent can't find exact matches.
-- **Memorizing** — keep track of matching kinds of expenses and categories, card numbers and bank accounts, specific
-  cases, etc. to learn more and more how to handle expenses.
-- **Duplicate/conflict handling** — before/after insert, detect duplicate entries (e.g., same expenses, same transaction
+- Memorizing — keep track of matching kinds of expenses and categories, card numbers and bank accounts, specific cases,
+  etc. to learn more and more how to handle expenses.
+- Duplicate/conflict handling — before/after insert, detect duplicate entries (e.g., same expenses, same transaction
   twice) and resolve conflicts in the table.
-
-Each of these should be its own package under `internal/`, developed and tested independently before wiring them
-together end-to-end.
 
 ## Tech stack
 
 - Language: Go version 1.26.6
 - LLM runtime: llama.cpp, OpenAI-compatible API, local inference
-    - Model: Qwen3.5-9B-NVFP4-GGUF (swappable — don't hardcode model name where avoidable)
+    - Model: Qwen3.5-9B-NVFP4-GGUF (swappable — don't hardcode the model name where avoidable)
     - Hardware: RTX 5070 12GB VRAM, 16GB RAM — keep this in mind for context window / concurrency limits when designing
       LLM calls
     - Context window: 128000 tokens
@@ -44,70 +41,138 @@ Frameworks:
 
 ## Architecture / project layout
 
-- Only one root command to run the agent as a daemon. Flag `--config` to provide path to the config file
+Each responsibility below is its own package under `internal/`, developed and tested independently before being wired
+together end-to-end:
+
+- Only one root command to run the agent as a daemon. Flag `--config` to provide the path to the config file
 - bin/ - path to test binaries
-- cmd/agent/ - main entrypoint
-- internal/telegram/ - Telegram bot backend
-- internal/LLMparser/ - LLM prompt and parsing logic
-- internal/memory/ - Postgres-backed agent memory (learned topic/category/wallet mappings, bank account mappings,
-  similarity search)
-- internal/handler/ - Enrichment loop: find suitable topics using memory/LLM, decide when to ask the user
-- internal/store/ - SQLite access, dedup/conflict logic
+- `cmd/agent` — Cobra entrypoint; the agent runs as a single daemon, `--config` selects the config file path.
+- `internal/telegram` — Telegram bot backend: receives the SQLite file and screenshots, sends questions/results back to
+  the user.
+- `internal/llmparser` — LLM prompts construction and parsing logic: sends screenshots to the local LLM and returns
+  structured `Expense` data; also resolves ambiguous topics/categories via LLM comparison.
+- `internal/memory` — Postgres-backed agent memory: learned topic/category/wallet mappings, bank account mappings,
+  similarity search over past decisions.
+- `internal/handler` — Enrichment loop: finds suitable topics using memory/LLM/SQLite lookups, decides when a user
+  question is required, aggregates results into the final approval message.
+- `internal/store` — SQLite access: inserting parsed expenses, duplicate/conflict detection before and after insert.
+- `internal/config` — YAML + Viper configuration loading (LLM, memory, telegram sections).
 - something else if it can be helpful
 
-## Conventions
+## Go coding conventions and best practices
 
-- Follow Go development best practices.
-- Prefer simplicity over abstraction, avoid premature interfaces/layers.
-- Implement logging with several log levels.
-- Write simple tests to cover critical paths.
-- Use linter to enforce code quality.
-- Secrets (Telegram bot token, LLM API key) and other parameters live in a YAML config file, never hardcoded or
-  committed.
+- Follow standard Go idioms: run `gofmt`/`goimports` before every commit; keep `golangci-lint` clean.
+- Prefer simplicity over abstraction — avoid introducing interfaces or extra layers until at least two concrete
+  implementations exist.
+- Return errors, don't panic, in library/package code; wrap errors with `fmt.Errorf("...: %w", err)` to preserve
+  context, and use `errors.Is`/`errors.As` (or `errors.AsType[T]`) for error inspection.
+- Use `context.Context` as the first parameter for any function doing I/O (HTTP calls, DB queries) and respect
+  cancellation/timeouts.
+- Keep exported APIs minimal; unexported types and functions by default, export only what other packages actually need.
+- Table-driven tests with Ginkgo/Gomega for anything with multiple branches or edge cases (refund vs. expense vs.
+  transfer vs. failed parse, duplicate vs. new transaction, etc.).
+- Structured logging via `zerolog` with appropriate levels (`Debug` for request/response bodies, `Info` for high-level
+  lifecycle events, `Warn`/`Error` for recoverable/unrecoverable failures) — never log secrets (API keys, bot tokens) or
+  full user financial data at `Info` level or above.
+- Prefer modern Go 1.26 idioms where they simplify code: `slices`/`maps` packages, `min`/`max`, `for i := range n`,
+  `errors.Join`, `t.Context()` in tests, `wg.Go` for goroutines spawned from a `sync.WaitGroup`, and `omitzero` (not
+  `omitempty`) for `time.Time`/`time.Duration`/struct/slice/ map JSON fields.
+- Keep configuration (secrets, settings) in the YAML config file loaded via viper — never hardcode tokens, API keys,
+  hosts, or model names in code.
+- One package, one responsibility: don't reach across `internal/` package boundaries except through their public API;
+  keep `internal/handler` as the only place that orchestrates `internal/memory`, `internal/llmparser`, and
+  `internal/store` together.
 
 ## LLM parsing notes
 
-- Input: screenshots of SMS'es. It can be different formats.
-- Output raw JSON schema: {amount, currency, bank account, date, topic}
-- Edge cases handled: usual expanse, refunds, failed parses, transfer between accounts, income
+- Input: screenshots of SMS messages, in varying formats.
+- Output raw JSON schema: `{amount, currency, bank_account, date, topic}` (plus `type`, `parse_failed`,
+  `failure_reason` — see `internal/llmparser/types.go`).
+- Edge cases handled: normal expense, refund, failed parse, transfer between accounts, income.
 
 ## Known constraints / things to remember
 
-- LLM must parse images to extract SMS data about expenses.
-- SQLite file must be received from the user before adding new expenses.
-- After changing an SQLite file and getting a user approval, the agent must return the updated SQLite file to the user
-  in a Telegram message.
+- The LLM must parse images to extract SMS data about expenses.
+- An SQLite file must be received from the user before adding new expenses.
+- After changing an SQLite file and getting a user approval, the agent must return the updated file to the user in a
+  Telegram message.
 
 ## The main loop
 
-1. The user sends an SQLite database file to the telegram bot.
-2. The agent receives the file and checks it. If it isn't an SQLite, the agent returns an error message about it. If
-   it's an SQLite, the agent saves the file to the data directory.
-3. The agent sends a message about waiting for screenshots from the user. On this step the user can send screenshots as
-   a group (multiple in one message) or one image at a time (step-by-step).
-4. When the user uploads all images, he enters `/parse` command. It means the agent can start parsing.
-5. Received screenshots must be saved to a queue. Every image from the queue must be parsed one by one.
-6. The agent aggregates answers from llm (raw sms data) to one list.
-7. The agent attempts to enrich the data to bring it to the expected structure. To do this, the agent finds exact
-   matches in memory (search expense name and category by description, search wallet by card number). If exact matches are
-   found, the agent brings the data to the expected structure. Every element is handled one by one.
-8. If the agent doesn't find something, it attempts to find matches in the SQLite data file. If the agent didn't find
-   exact matches, it gets several best matches (fuzzy/substring) and exercises a request to llm.
-9. Llm attempts to compare received options from the request to define suitable title, category, and wallet. If it's
-   success, the agent enriches the element and saves new data to the memory.
-10. If llm didn't find really suitable options (not sure more than 90%), it prepares a message with a question about
-    this expense. (What is an expense name and a category of this description, or what is a wallet name of this bank number.)
-    One unknown expense is one request to the user. The questions are asked gradually so that the user can answer them
-    calmly.
-11. The user answers with an expense name, and category (e.g. "poppy coffee, coffee"), or wallet name (if a question about
-    wallets).
-12. The agent receives user answers, enriches unknown expense using these answers, saves new information (matches) into
-    the memory, and checks unknown expenses with the new saved data from the user (e.g., There are several expenses from
-    one unknown place. After the user answers about the first expense, the next expenses become known. Don't need to ask
-    again).
-13. When the list of all parsed expenses is prepared and enriched, the agent sends it to the user and asks an approval
-    (the message contains examples of answer). If the approval is received, the agent adds information to the SQLite
-    database file.
-14. If not, the agent saves the list as unapproved data, to allow the user to edit/fix it.
-15. If the SQLite database updated successfully, the agent sends the updated file to the user. The cycle is complete.
-16. To repeat this cycle the user must send a new SQLite database file.
+1. The user sends an SQLite database file to the Telegram bot.
+2. The agent receives the file and checks it. If it isn't an SQLite file, the agent returns an error message. If it is,
+   the agent saves the file to the data directory.
+3. The agent sends a message about waiting for screenshots. The user can send screenshots as a group (multiple in one
+   message) or one image at a time.
+4. When the user has uploaded all images, they enter `/parse`. This signals the agent to start parsing.
+5. Received screenshots are saved to a queue and parsed one by one.
+6. The agent aggregates the LLM's answers (raw SMS data) into one list.
+7. The agent enriches the data to match the expected structure: it first searches memory for exact matches (expense
+   name/category by description, wallet by card number). If found, it enriches the element directly. Every element is
+   handled one by one.
+8. If memory doesn't have an exact match, the agent searches the SQLite data file. If still no exact match, it gets
+   several best (fuzzy/substring) matches and sends a request to the LLM.
+9. The LLM compares the candidate options to pick a suitable title, category, and wallet. On success, the agent enriches
+   the element and saves the new mapping to memory.
+10. If the LLM isn't confident (> 90%) about any option, the agent prepares a question for the user about that specific
+    expense (name and category, or wallet name for a bank number). One unknown expense is one request; questions are
+    asked gradually.
+11. The user answers with an expense name and category (e.g., "poppy coffee", "coffee"), or a wallet name.
+12. The agent enriches the unknown expense using the answers, saves the new mapping to memory, and re-checks other
+    unknown expenses against the newly learned data (so, e.g., several expenses from the same unknown place only need
+    one question).
+13. Once the full list is enriched, the agent sends it to the user and asks for approval (the message includes examples
+    of how to answer). If approved, the agent writes the data to the SQLite file.
+14. If not approved, the agent saves the list as unapproved data so the user can edit/fix it.
+15. If the SQLite database is updated successfully, the agent sends the updated file back to the user. The cycle is
+    complete.
+16. To repeat the cycle, the user sends a new SQLite database file.
+
+## Data schemas
+
+Expected raw data from LLM:
+
+- type - TransactionType
+- amount - float64
+- currency - string
+- bank_account - string
+- date - string
+- description - string
+- parse_failed - bool
+- failure_reason - string, omitempty
+
+Expected expenses data after enrichment with additional data from memory:
+
+- transaction_pk - string
+- paired_transaction_fk - string
+- name - string
+- amount - float64
+- note - string
+- category_fk - string
+- sub_category_fk - string
+- wallet_fk - string
+- date_created - int64
+- date_time_modified - int64
+- original_date_due - int64
+- income - bool
+- period_length - int64
+- reoccurrence - int64
+- end_date - int64
+- upcoming_transaction_notification - bool
+- type - int64
+- paid - bool
+- created_another_future_transaction - bool
+- skip_paid - bool
+- method_added - int64
+- transaction_owner_email - string
+- transaction_original_owner_email - string
+- shared_key - string
+- shared_old_key - string
+- shared_status - int64
+- shared_date_updated - int64
+- shared_reference_budget_pk - string
+- objective_fk - string
+- objective_loan_fk - string
+- budget_fks_exclude - string
+
+Only records matching this structure can be inserted into the database.
