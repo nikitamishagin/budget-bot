@@ -131,8 +131,10 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 
 	if resolution.NeedsUserInput || !resolution.Matched {
 		// Per llama-issue.md "Requests to user about expense name, category and wallet": the
-		// build it ourselves rather than trusting the LLM's freeform question to include it.
 		// question must always quote the exact raw description from the SMS data (description), so we
+		// build it ourselves rather than trusting the LLM's freeform question to include it. Name,
+		// category and subcategory are then asked one at a time by the caller (see
+		// internal/telegram/bot.go processNext/handleNameAnswer/handleCategoryAnswer).
 		return Result{NeedsUserInput: true, Question: NameQuestion(description)}, nil
 	}
 
@@ -208,18 +210,30 @@ func (e *Enricher) resolveWallet(ctx context.Context, account, currency string) 
 	return walletFK, ok, nil
 }
 
-// nameAndCategoryQuestion builds the strictly-formatted question asked when the agent cannot
-// confidently determine an expense's name/category, per llama-issue.md "Requests to user about
-// expense name, category and wallet": it must always quote the exact raw description from the
-// SMS data.
-func nameAndCategoryQuestion(rawTopic string) string {
-	return fmt.Sprintf("What is the name of the %q expense, and what category does it belong to?", rawTopic)
+// NameQuestion builds the strictly formatted question asked when the agent cannot confidently
+// determine an expense's name/category/subcategory, per llama-issue.md "Requests to user about
+// expense name, category, and wallet": it must always quote the exact raw description from the
+// SMS data. Category and subcategory are asked separately afterward, see CategoryQuestion and
+// SubCategoryQuestion.
+func NameQuestion(rawDesc string) string {
+	return fmt.Sprintf("What is the name of the %q expense?", rawDesc)
+}
+
+// CategoryQuestion builds the question asked after the name, for the same raw description.
+func CategoryQuestion(rawDesc string) string {
+	return fmt.Sprintf("What category does the %q expense belong to?", rawDesc)
+}
+
+// SubCategoryQuestion builds the question asked after the category, for the same raw
+// description. The subcategory is optional, so the caller should accept an empty/skip answer.
+func SubCategoryQuestion(rawDesc string) string {
+	return fmt.Sprintf("What subcategory does the %q expense belong to? (reply \"-\" to leave it empty)", rawDesc)
 }
 
 // walletQuestion builds the question asked when the agent cannot resolve a bank account/card
 // number (and currency) to a known wallet, per llama-issue.md "Wallet matching": the currency is
-// included since the same card can map to different wallets depending on it (e.g. wallets named
-// "TBC * (RSD)" vs "TBC * (USD)").
+// included since the same card can map to different wallets depending on it (e.g., wallets named
+// "TBC * (RSD)" vs. "TBC * (USD)").
 func walletQuestion(rawAccount, currency string) string {
 	if strings.TrimSpace(currency) == "" {
 		return fmt.Sprintf("Which wallet does account %q belong to?", rawAccount)

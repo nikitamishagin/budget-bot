@@ -11,13 +11,15 @@ You will be given one image that may contain one or more SMS messages from a ban
   "amount": number, always positive,
   "currency": ISO 4217 currency code as printed or inferred (e.g. "USD", "RUB", "EUR"),
   "bank_account": account/card identifier mentioned in the SMS, e.g. last 4 digits (empty string if not present),
-  "date": the transaction date/time exactly as printed in the SMS (empty string if not present),
+  "date": the transaction date/time exactly as printed in the SMS (empty string if not present) must be in yyyy.mm.dd hh:mm format,
   "description": the merchant, counterparty, or other account name involved,
   "parse_failed": boolean, true only if the image is unreadable or does not contain a recognizable bank transaction SMS,
   "failure_reason": short explanation when parse_failed is true, otherwise omit or leave empty
 }
 
 Rules:
+- Only expenses, deposits and cancellations need to be processed.
+- Do not process service messages such as: Balance status, confirmation requests with a one-time code, rejected transactions without debiting, information messages.
 - If the image contains several separate SMS messages, output one object per message, in the order they appear, inside the JSON array.
 - If the image contains only one SMS message, output an array with a single object.
 - "expense" - a normal purchase or payment.
@@ -26,6 +28,8 @@ Rules:
 - "income" - money received that is not a refund or a transfer (e.g. salary, deposit).
 - "unknown" - use only if the transaction type genuinely cannot be determined, but the SMS itself is readable.
 - If the image cannot be read at all, or does not contain any bank transaction, output an array with a single object where "parse_failed" is true, "failure_reason" is filled, and the other fields have sensible empty defaults ("type": "unknown", "amount": 0).
+- if a message doesn't clearly describe a transaction (amount debited/credited to a merchant/counterparty), it must not force it into "expense" - it should mark parse_failed: true or type: "unknown" rather than guess.
+- If you cannot identify a clear debited/credited amount tied to a specific transaction, do not guess - set parse_failed true.
 - Do not invent information that is not present or reasonably inferable from the image.
 - Do not merge distinct SMS messages into one object, and do not drop any message present in the image.
 - Respond with a raw JSON array only, matching the schema above exactly.`

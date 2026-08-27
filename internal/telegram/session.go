@@ -14,9 +14,15 @@ const (
 	// pendingWallet means the bot is waiting for the user to name the wallet a bank account
 	// belongs to.
 	pendingWallet pendingKind = iota
+	// pendingName means the bot is waiting for the user to name the expense itself, for a
+	// transaction the LLM could not confidently resolve.
+	pendingName
 	// pendingCategory means the bot is waiting for the user to name the category for a
 	// transaction the LLM could not confidently resolve.
 	pendingCategory
+	// pendingSubCategory means the bot is waiting for the user to name the (optional)
+	// subcategory for a transaction the LLM could not confidently resolve.
+	pendingSubCategory
 	// pendingApproval means the bot is waiting for the user to confirm ("yes"/"no") that a whole
 	// batch of already-enriched expenses (parsed from every queued screenshot) should be saved,
 	// per AGENTS.md step 13.
@@ -30,9 +36,13 @@ const (
 // pendingState tracks what a single chat is waiting for next.
 type pendingState struct {
 	kind pendingKind
-	// expense is the raw parsed expense currently being enriched (kind == pendingWallet or
-	// pendingCategory).
+	// expense is the raw parsed expense currently being enriched (kind == pendingWallet,
+	// pendingName, pendingCategory, or pendingSubCategory).
 	expense llmparser.Expense
+	// name/categoryFK accumulate the answers already given while walking through pendingName,
+	// pendingCategory, and pendingSubCategory in sequence for the current expense.
+	name       string
+	categoryFK string
 	// queue holds the remaining raw expenses (from every queued screenshot) still waiting to be
 	// enriched, per AGENTS.md step 5 ("every image from the queue must be parsed one by one").
 	queue []llmparser.Expense

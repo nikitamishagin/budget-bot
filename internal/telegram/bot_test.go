@@ -258,20 +258,28 @@ var _ = Describe("Bot.HandleText", func() {
 		Expect(sender.last()).To(ContainSubstring("Save these transactions?"))
 	})
 
-	It("calls ResolveWithUserInput after the user names the category", func() {
+	It("asks for name, category, and subcategory separately, saving each into the correct field", func() {
 		sender := &fakeSender{}
 		accounts := newFakeAccounts()
 		accounts.wallets["1234|"] = "wallet-main"
-		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "What category and wallet should I use for \"Unknown Shop\"?"}}
+		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "What is the name of the \"Unknown Shop\" expense?"}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Unknown Shop", Account: "1234"}}}
 		bot := newTestBot(sender, parser, enricher, accounts, []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
 		bot.HandleParse(context.Background(), 1)
 
+		bot.HandleText(context.Background(), 1, "Corner Shop")
+		Expect(sender.last()).To(ContainSubstring("category"))
+
 		bot.HandleText(context.Background(), 1, "cat-groceries")
+		Expect(sender.last()).To(ContainSubstring("subcategory"))
+
+		bot.HandleText(context.Background(), 1, "-")
 
 		Expect(enricher.resolveCalls).To(Equal(1))
+		Expect(enricher.resolveArgs[0]).To(Equal("Corner Shop"))
 		Expect(enricher.resolveArgs[1]).To(Equal("cat-groceries"))
+		Expect(enricher.resolveArgs[2]).To(Equal(""))
 		Expect(enricher.resolveArgs[3]).To(Equal("wallet-main"))
 		Expect(sender.last()).To(ContainSubstring("Save these transactions?"))
 	})

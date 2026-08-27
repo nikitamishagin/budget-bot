@@ -194,8 +194,12 @@ func (b *Bot) HandleText(ctx context.Context, chatID int64, text string) {
 	switch state.kind {
 	case pendingWallet:
 		b.handleWalletAnswer(ctx, chatID, state, text)
+	case pendingName:
+		b.handleNameAnswer(chatID, state, text)
 	case pendingCategory:
-		b.handleCategoryAnswer(ctx, chatID, state, text)
+		b.handleCategoryAnswer(chatID, state, text)
+	case pendingSubCategory:
+		b.handleSubCategoryAnswer(ctx, chatID, state, text)
 	case pendingApproval:
 		b.handleApprovalAnswer(ctx, chatID, state, text)
 	case pendingEditing:
@@ -218,7 +222,31 @@ func (b *Bot) handleWalletAnswer(ctx context.Context, chatID int64, state *pendi
 	b.resumeQueue(ctx, chatID, state)
 }
 
-func (b *Bot) handleCategoryAnswer(ctx context.Context, chatID int64, state *pendingState, categoryFK string) {
+// handleNameAnswer records the user-supplied expense name and moves on to asking for the
+// category, per the requirement to request name, category, and subcategory separately.
+func (b *Bot) handleNameAnswer(chatID int64, state *pendingState, name string) {
+	state.name = name
+	state.kind = pendingCategory
+	b.sessions.set(chatID, state)
+	b.reply(chatID, handler.CategoryQuestion(state.expense.Description))
+}
+
+// handleCategoryAnswer records the user-supplied category and moves on to asking for the
+// (optional) subcategory.
+func (b *Bot) handleCategoryAnswer(chatID int64, state *pendingState, categoryFK string) {
+	state.categoryFK = categoryFK
+	state.kind = pendingSubCategory
+	b.sessions.set(chatID, state)
+	b.reply(chatID, handler.SubCategoryQuestion(state.expense.Description))
+}
+
+// handleSubCategoryAnswer records the (optional) subcategory answer - "-" leaves it empty - and
+// resolves the fully-answered expense (name, category, subcategory, wallet) into the batch.
+func (b *Bot) handleSubCategoryAnswer(ctx context.Context, chatID int64, state *pendingState, subCategoryFK string) {
+	if subCategoryFK == "-" {
+		subCategoryFK = ""
+	}
+
 	walletFK := ""
 	if account := strings.TrimSpace(state.expense.Account); account != "" && b.Accounts != nil {
 		if wallet, ok, err := b.Accounts.ResolveAccount(ctx, account, state.expense.Currency); err == nil && ok {
@@ -231,7 +259,7 @@ func (b *Bot) handleCategoryAnswer(ctx context.Context, chatID int64, state *pen
 		return
 	}
 
-	enriched, err := b.Enricher.ResolveWithUserInput(ctx, state.expense, state.expense.Topic, categoryFK, "", walletFK, state.expense.Type == llmparser.TransactionIncome)
+	enriched, err := b.Enricher.ResolveWithUserInput(ctx, state.expense, state.name, state.categoryFK, subCategoryFK, walletFK, state.expense.Type == llmparser.TransactionIncome)
 	if err != nil {
 		log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to resolve with user input")
 		b.reply(chatID, "Sorry, I could not save that. Please try again.")
@@ -414,7 +442,7 @@ func (b *Bot) processNext(ctx context.Context, chatID int64) {
 		}
 
 		if result.NeedsUserInput {
-			kind := pendingCategory
+			kind := pendingName
 			if isWalletQuestion(result.Question) {
 				kind = pendingWallet
 			}
@@ -462,9 +490,13 @@ func formatEnrichedExpense(e *handler.EnrichedExpense) string {
 	if e.Income {
 		kind = "Income"
 	}
+	sub := e.SubCategoryFK
+	if sub == "" {
+		sub = "-"
+	}
 	return fmt.Sprintf(
-		"%s: %s\nAmount: %.2f\nCategory: %s\nWallet: %s\nDate: %s",
-		kind, e.Name, e.Amount, e.CategoryFK, e.WalletFK, e.Date,
+		"%s: %s\nAmount: %.2f\nCategory: %s\nSubcategory: %s\nWallet: %s\nNote: %s\nDate: %s",
+		kind, e.Name, e.Amount, e.CategoryFK, sub, e.WalletFK, e.RawDescription, e.Date,
 	)
 }
 

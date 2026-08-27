@@ -19,10 +19,10 @@ type Candidate struct {
 // Resolution is the LLM's decision about which candidate (if any) matches a newly parsed
 // expense's topic, or a clarifying question to ask the user when none of the candidates fit.
 type Resolution struct {
-	// Matched indicates that MatchedIndex points to a candidate (or new fields below are filled
+	// Matched indicates that MatchedIndex points to a candidate (or the new fields below are filled
 	// in directly) that should be used to enrich the expense.
 	Matched bool `json:"matched"`
-	// MatchedIndex is the zero-based index into the candidates slice that was matched, valid only
+	// MatchedIndex is the zero-based index into the candidates slice that was matched valid only
 	// when Matched is true and >= 0.
 	MatchedIndex int `json:"matched_index"`
 	// Name, CategoryFK, SubCategoryFK, WalletFK, Income let the LLM propose enrichment fields
@@ -33,7 +33,7 @@ type Resolution struct {
 	SubCategoryFK string `json:"sub_category_fk,omitempty"`
 	WalletFK      string `json:"wallet_fk"`
 	Income        bool   `json:"income"`
-	// NeedsUserInput is true when neither a candidate nor a confident guess is available and the
+	// NeedsUserInput is true when neither a candidate nor a confident guess is available, and the
 	// user must be asked Question to supply the missing information.
 	NeedsUserInput bool   `json:"needs_user_input"`
 	Question       string `json:"question,omitempty"`
