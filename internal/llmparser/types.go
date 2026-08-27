@@ -28,8 +28,8 @@ type Expense struct {
 	Account string `json:"bank_account"`
 	// Date is the transaction date/time as printed in the SMS, in RFC3339 if determinable, otherwise as-is.
 	Date string `json:"date"`
-	// Topic is the merchant/counterparty name, or the other account for transfers.
-	Topic string `json:"topic"`
+	// Description is the merchant/counterparty name, or the other account for transfers.
+	Description string `json:"description"`
 	// ParseFailed indicates the model could not confidently extract data from the image.
 	ParseFailed bool `json:"parse_failed"`
 	// FailureReason explains why parsing failed, empty when ParseFailed is false.

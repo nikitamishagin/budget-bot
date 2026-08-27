@@ -12,7 +12,7 @@ You will be given one image that may contain one or more SMS messages from a ban
   "currency": ISO 4217 currency code as printed or inferred (e.g. "USD", "RUB", "EUR"),
   "bank_account": account/card identifier mentioned in the SMS, e.g. last 4 digits (empty string if not present),
   "date": the transaction date/time exactly as printed in the SMS (empty string if not present),
-  "topic": the merchant, counterparty, or other account name involved,
+  "description": the merchant, counterparty, or other account name involved,
   "parse_failed": boolean, true only if the image is unreadable or does not contain a recognizable bank transaction SMS,
   "failure_reason": short explanation when parse_failed is true, otherwise omit or leave empty
 }

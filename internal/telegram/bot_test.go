@@ -178,7 +178,7 @@ var _ = Describe("Bot.HandleCommand", func() {
 var _ = Describe("Bot.HandlePhoto and Bot.HandleParse", func() {
 	It("queues the screenshot instead of parsing it immediately", func() {
 		sender := &fakeSender{}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks", Amount: 9.5}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks", Amount: 9.5}}}
 		bot := newTestBot(sender, parser, &fakeEnricher{}, newFakeAccounts(), []string{"alice"})
 
 		bot.HandlePhoto(context.Background(), 1, []byte("fake-image"), "image/jpeg")
@@ -189,7 +189,7 @@ var _ = Describe("Bot.HandlePhoto and Bot.HandleParse", func() {
 	It("asks for approval once every queued screenshot is parsed and enriched", func() {
 		sender := &fakeSender{}
 		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks", Amount: 9.5, CategoryFK: "cat-food", WalletFK: "wallet-main"}}}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks", Amount: 9.5}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks", Amount: 9.5}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("fake-image"), "image/jpeg")
 
@@ -202,7 +202,7 @@ var _ = Describe("Bot.HandlePhoto and Bot.HandleParse", func() {
 	It("relays the clarification question when the enricher needs user input", func() {
 		sender := &fakeSender{}
 		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "Which wallet does account \"1234\" belong to?"}}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Unknown Shop", Account: "1234"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Unknown Shop", Account: "1234"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("fake-image"), "image/jpeg")
 
@@ -246,7 +246,7 @@ var _ = Describe("Bot.HandleText", func() {
 		sender := &fakeSender{}
 		accounts := newFakeAccounts()
 		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "Which wallet does account \"1234\" belong to?"}}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Unknown Shop", Account: "1234"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Unknown Shop", Account: "1234"}}}
 		bot := newTestBot(sender, parser, enricher, accounts, []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
 		bot.HandleParse(context.Background(), 1)
@@ -263,7 +263,7 @@ var _ = Describe("Bot.HandleText", func() {
 		accounts := newFakeAccounts()
 		accounts.wallets["1234|"] = "wallet-main"
 		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "What category and wallet should I use for \"Unknown Shop\"?"}}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Unknown Shop", Account: "1234"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Unknown Shop", Account: "1234"}}}
 		bot := newTestBot(sender, parser, enricher, accounts, []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
 		bot.HandleParse(context.Background(), 1)
@@ -279,7 +279,7 @@ var _ = Describe("Bot.HandleText", func() {
 	It("sends the database file back once the user approves", func() {
 		sender := &fakeSender{}
 		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks"}}}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
 		bot.HandleParse(context.Background(), 1)
@@ -292,7 +292,7 @@ var _ = Describe("Bot.HandleText", func() {
 	It("discards the expense once the user declines", func() {
 		sender := &fakeSender{}
 		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks"}}}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
 		bot.HandleParse(context.Background(), 1)
@@ -305,7 +305,7 @@ var _ = Describe("Bot.HandleText", func() {
 	It("re-asks when the approval answer is not yes/no", func() {
 		sender := &fakeSender{}
 		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks"}}}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
 		bot.HandleParse(context.Background(), 1)
@@ -319,7 +319,7 @@ var _ = Describe("Bot.HandleText", func() {
 		sender := &fakeSender{}
 		writer := newFakeWriter()
 		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks", CategoryFK: "cat-wrong", WalletFK: "wallet-1"}}}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.OpenDatabase = func(string) (ExpenseWriter, error) { return writer, nil }
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
@@ -339,7 +339,7 @@ var _ = Describe("Bot.HandleText", func() {
 	It("discards a rejected batch entirely on request", func() {
 		sender := &fakeSender{}
 		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks"}}}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
 		bot.HandleParse(context.Background(), 1)
@@ -354,7 +354,7 @@ var _ = Describe("Bot.HandleText", func() {
 var _ = Describe("Bot.HandleDocument", func() {
 	It("blocks screenshots until a database file has been received", func() {
 		sender := &fakeSender{}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		dir, err := os.MkdirTemp("", "telegram-test-*")
 		Expect(err).NotTo(HaveOccurred())
 		bot := NewBot(sender, parser, &fakeEnricher{}, newFakeAccounts(), []string{"alice"}, dir)
@@ -367,7 +367,7 @@ var _ = Describe("Bot.HandleDocument", func() {
 	It("unlocks screenshot processing once a database file is saved", func() {
 		sender := &fakeSender{}
 		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks"}}}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		dir, err := os.MkdirTemp("", "telegram-test-*")
 		Expect(err).NotTo(HaveOccurred())
 		bot := NewBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"}, dir)
@@ -400,7 +400,7 @@ var _ = Describe("Bot approval saving", func() {
 		sender := &fakeSender{}
 		writer := newFakeWriter()
 		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks", Amount: 5.5, CategoryFK: "cat-coffee", WalletFK: "wallet-1"}}}
-		parser := &fakeParser{expenses: []llmparser.Expense{{Topic: "Starbucks"}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.OpenDatabase = func(string) (ExpenseWriter, error) { return writer, nil }
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")

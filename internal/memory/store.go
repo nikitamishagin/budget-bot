@@ -69,7 +69,7 @@ func (s *Store) FindBestMatch(ctx context.Context, topic string) (candidate Cand
 	`, topic)
 
 	var c Candidate
-	if err := row.Scan(&c.RawTopic, &c.Name, &c.CategoryFK, &c.SubCategoryFK, &c.WalletFK, &c.Income, &c.Score); err != nil {
+	if err := row.Scan(&c.RawDesc, &c.Name, &c.CategoryFK, &c.SubCategoryFK, &c.WalletFK, &c.Income, &c.Score); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Candidate{}, false, nil
 		}
@@ -101,7 +101,7 @@ func (s *Store) TopCandidates(ctx context.Context, topic string, n int) ([]Candi
 	var candidates []Candidate
 	for rows.Next() {
 		var c Candidate
-		if err := rows.Scan(&c.RawTopic, &c.Name, &c.CategoryFK, &c.SubCategoryFK, &c.WalletFK, &c.Income, &c.Score); err != nil {
+		if err := rows.Scan(&c.RawDesc, &c.Name, &c.CategoryFK, &c.SubCategoryFK, &c.WalletFK, &c.Income, &c.Score); err != nil {
 			return nil, fmt.Errorf("scan candidate: %w", err)
 		}
 		candidates = append(candidates, c)
@@ -116,7 +116,7 @@ func (s *Store) TopCandidates(ctx context.Context, topic string, n int) ([]Candi
 // the same raw topic, category, and wallet already exists, its hit_count is incremented instead of
 // creating a duplicate row.
 func (s *Store) SaveTrainingPair(ctx context.Context, pair TrainingPair) error {
-	topic := strings.TrimSpace(pair.RawTopic)
+	topic := strings.TrimSpace(pair.RawDesc)
 	if topic == "" {
 		return fmt.Errorf("raw topic must not be empty")
 	}

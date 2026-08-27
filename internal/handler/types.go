@@ -7,15 +7,15 @@ package handler
 // EnrichedExpense holds the fields required to insert a transaction into the Cashew schema,
 // derived from a parsed llmparser.Expense plus memory/LLM/user-supplied enrichment data.
 type EnrichedExpense struct {
-	Name          string
-	Amount        float64
-	CategoryFK    string
-	SubCategoryFK string
-	WalletFK      string
-	Income        bool
-	RawTopic      string
-	RawAccount    string
-	Date          string
+	Name           string
+	Amount         float64
+	CategoryFK     string
+	SubCategoryFK  string
+	WalletFK       string
+	Income         bool
+	RawDescription string
+	RawAccount     string
+	Date           string
 }
 
 // Result is the outcome of Enricher.Enrich: either a ready-to-insert Expense, or a Question that

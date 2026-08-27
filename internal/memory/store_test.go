@@ -58,7 +58,7 @@ var _ = Describe("Store", func() {
 
 		It("finds an exact topic match with score 1", func() {
 			Expect(store.SaveTrainingPair(ctx, TrainingPair{
-				RawTopic:   "Starbucks Coffee",
+				RawDesc:    "Starbucks Coffee",
 				Name:       "Starbucks",
 				CategoryFK: "cat-food",
 				WalletFK:   "wallet-main",
@@ -75,7 +75,7 @@ var _ = Describe("Store", func() {
 
 		It("increments hit_count when saving the same pair again", func() {
 			pair := TrainingPair{
-				RawTopic:   "Uber Trip",
+				RawDesc:    "Uber Trip",
 				Name:       "Uber",
 				CategoryFK: "cat-transport",
 				WalletFK:   "wallet-main",
@@ -99,13 +99,13 @@ var _ = Describe("Store", func() {
 	Describe("TopCandidates", func() {
 		BeforeEach(func() {
 			Expect(store.SaveTrainingPair(ctx, TrainingPair{
-				RawTopic: "Amazon Marketplace", Name: "Amazon", CategoryFK: "cat-shopping", WalletFK: "wallet-main",
+				RawDesc: "Amazon Marketplace", Name: "Amazon", CategoryFK: "cat-shopping", WalletFK: "wallet-main",
 			})).To(Succeed())
 			Expect(store.SaveTrainingPair(ctx, TrainingPair{
-				RawTopic: "Amazon Prime Video", Name: "Amazon Prime", CategoryFK: "cat-subscriptions", WalletFK: "wallet-main",
+				RawDesc: "Amazon Prime Video", Name: "Amazon Prime", CategoryFK: "cat-subscriptions", WalletFK: "wallet-main",
 			})).To(Succeed())
 			Expect(store.SaveTrainingPair(ctx, TrainingPair{
-				RawTopic: "Local Grocery Store", Name: "Grocery", CategoryFK: "cat-food", WalletFK: "wallet-main",
+				RawDesc: "Local Grocery Store", Name: "Grocery", CategoryFK: "cat-food", WalletFK: "wallet-main",
 			})).To(Succeed())
 		})
 

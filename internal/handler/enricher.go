@@ -11,28 +11,28 @@ import (
 
 // MemoryStore is the subset of *memory.Store that the Enricher depends on.
 type MemoryStore interface {
-	FindBestMatch(ctx context.Context, topic string) (memory.Candidate, bool, error)
-	TopCandidates(ctx context.Context, topic string, n int) ([]memory.Candidate, error)
+	FindBestMatch(ctx context.Context, description string) (memory.Candidate, bool, error)
+	TopCandidates(ctx context.Context, description string, n int) ([]memory.Candidate, error)
 	SaveTrainingPair(ctx context.Context, pair memory.TrainingPair) error
-	// ResolveAccount/SaveAccountMapping are keyed by (accountPattern, currency): a single card can
+	// ResolveAccount / SaveAccountMapping are keyed by (accountPattern, currency): a single card can
 	// produce expenses in several currencies that must map to different wallets, per
 	// llama-issue.md "Wallet matching".
 	ResolveAccount(ctx context.Context, accountPattern, currency string) (string, bool, error)
 	SaveAccountMapping(ctx context.Context, accountPattern, currency, walletFK string) error
 }
 
-// Resolver asks an LLM to match a parsed expense's topic against a short list of memory
+// Resolver asks an LLM to match a parsed expense's description against a short list of memory
 // candidates, or to say that the user must be asked for missing information.
 type Resolver interface {
 	ResolveTopic(ctx context.Context, expense llmparser.Expense, candidates []llmparser.Candidate) (llmparser.Resolution, error)
 }
 
 // DBLookup finds fallback enrichment candidates directly in the user's SQLite database file,
-// used when memory (Postgres) has no candidates for a topic - see AGENTS.md step 8 of the main
+// used when memory (Postgres) has no candidates for a description - see AGENTS.md step 8 of the main
 // loop: "If the agent doesn't find something [in memory], it attempts to find matches in the
 // SQLite data file [...] it gets several best matches (fuzzy/substring)".
 type DBLookup interface {
-	FindCandidates(ctx context.Context, topic string, limit int) ([]DBCandidate, error)
+	FindCandidates(ctx context.Context, description string, limit int) ([]DBCandidate, error)
 }
 
 // DBCandidate is candidate enrichment (name/category/wallet/income) found directly in the
@@ -84,8 +84,8 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		return Result{NeedsUserInput: true, Question: fmt.Sprintf("I could not parse this message (%s). Could you clarify the transaction details?", reason)}, nil
 	}
 
-	topic := strings.TrimSpace(exp.Topic)
-	if topic == "" {
+	description := strings.TrimSpace(exp.Description)
+	if description == "" {
 		return Result{NeedsUserInput: true, Question: "I could not determine the merchant/counterparty for this transaction. What is it for?"}, nil
 	}
 
@@ -94,7 +94,7 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		return Result{}, err
 	}
 
-	best, ok, err := e.Memory.FindBestMatch(ctx, topic)
+	best, ok, err := e.Memory.FindBestMatch(ctx, description)
 	if err != nil {
 		return Result{}, fmt.Errorf("find best memory match: %w", err)
 	}
@@ -110,14 +110,14 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		return Result{NeedsUserInput: true, Question: walletQuestion(exp.Account, exp.Currency)}, nil
 	}
 
-	candidates, err := e.Memory.TopCandidates(ctx, topic, e.TopN)
+	candidates, err := e.Memory.TopCandidates(ctx, description, e.TopN)
 	if err != nil {
 		return Result{}, fmt.Errorf("find top candidates: %w", err)
 	}
 
 	llmCandidates := toLLMCandidates(candidates)
 	if len(llmCandidates) == 0 && len(db) > 0 && db[0] != nil {
-		dbCandidates, err := db[0].FindCandidates(ctx, topic, e.TopN)
+		dbCandidates, err := db[0].FindCandidates(ctx, description, e.TopN)
 		if err != nil {
 			return Result{}, fmt.Errorf("find db candidates: %w", err)
 		}
@@ -126,18 +126,18 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 
 	resolution, err := e.Resolver.ResolveTopic(ctx, exp, llmCandidates)
 	if err != nil {
-		return Result{}, fmt.Errorf("resolve topic: %w", err)
+		return Result{}, fmt.Errorf("resolve description: %w", err)
 	}
 
 	if resolution.NeedsUserInput || !resolution.Matched {
 		// Per llama-issue.md "Requests to user about expense name, category and wallet": the
-		// question must always quote the exact raw description from the SMS data (topic), so we
 		// build it ourselves rather than trusting the LLM's freeform question to include it.
-		return Result{NeedsUserInput: true, Question: nameAndCategoryQuestion(topic)}, nil
+		// question must always quote the exact raw description from the SMS data (description), so we
+		return Result{NeedsUserInput: true, Question: NameQuestion(description)}, nil
 	}
 
 	pair := memory.TrainingPair{
-		RawTopic:      topic,
+		RawDesc:       description,
 		Name:          resolution.Name,
 		CategoryFK:    resolution.CategoryFK,
 		SubCategoryFK: resolution.SubCategoryFK,
@@ -162,7 +162,7 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 // ResolveWithUserInput records the user-supplied enrichment fields for a previously ambiguous
 // expense into memory and returns the now-complete EnrichedExpense. This closes the loop
 // described in MEMORY-GUIDELINES.md: any decision made (by the LLM or the user) flows back into
-// memory, so the same topic/account is recognized automatically next time.
+// memory, so the same description/account is recognized automatically next time.
 func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool) (*EnrichedExpense, error) {
 	if categoryFK == "" || walletFK == "" {
 		return nil, fmt.Errorf("category_fk and wallet_fk are required")
@@ -174,16 +174,16 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 		}
 	}
 
-	topic := strings.TrimSpace(exp.Topic)
+	description := strings.TrimSpace(exp.Description)
 	pair := memory.TrainingPair{
-		RawTopic:      topic,
+		RawDesc:       description,
 		Name:          name,
 		CategoryFK:    categoryFK,
 		SubCategoryFK: subCategoryFK,
 		WalletFK:      walletFK,
 		Income:        income,
 	}
-	if topic != "" {
+	if description != "" {
 		if err := e.Memory.SaveTrainingPair(ctx, pair); err != nil {
 			return nil, fmt.Errorf("save training pair: %w", err)
 		}
@@ -229,15 +229,15 @@ func walletQuestion(rawAccount, currency string) string {
 
 func (e *Enricher) buildExpense(exp llmparser.Expense, pair memory.TrainingPair, walletFK string) *EnrichedExpense {
 	return &EnrichedExpense{
-		Name:          pair.Name,
-		Amount:        exp.Amount,
-		CategoryFK:    pair.CategoryFK,
-		SubCategoryFK: pair.SubCategoryFK,
-		WalletFK:      walletFK,
-		Income:        pair.Income || exp.Type == llmparser.TransactionIncome,
-		RawTopic:      exp.Topic,
-		RawAccount:    exp.Account,
-		Date:          exp.Date,
+		Name:           pair.Name,
+		Amount:         exp.Amount,
+		CategoryFK:     pair.CategoryFK,
+		SubCategoryFK:  pair.SubCategoryFK,
+		WalletFK:       walletFK,
+		Income:         pair.Income || exp.Type == llmparser.TransactionIncome,
+		RawDescription: exp.Description,
+		RawAccount:     exp.Account,
+		Date:           exp.Date,
 	}
 }
 

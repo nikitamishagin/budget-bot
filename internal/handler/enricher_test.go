@@ -28,9 +28,9 @@ func newFakeMemory() *fakeMemory {
 	return &fakeMemory{accounts: map[string]string{}}
 }
 
-func (f *fakeMemory) FindBestMatch(_ context.Context, topic string) (memory.Candidate, bool, error) {
+func (f *fakeMemory) FindBestMatch(_ context.Context, description string) (memory.Candidate, bool, error) {
 	for _, p := range f.pairs {
-		if p.RawTopic == topic {
+		if p.RawDesc == description {
 			return memory.Candidate{TrainingPair: p, Score: 1.0}, true, nil
 		}
 	}
@@ -97,11 +97,11 @@ var _ = Describe("Enricher.Enrich", func() {
 		res = &fakeResolver{}
 		enr = NewEnricher(mem, res, 5, 0.9)
 		exp = llmparser.Expense{
-			Type:    llmparser.TransactionExpense,
-			Amount:  9.5,
-			Account: "1234",
-			Topic:   "Starbucks Coffee",
-			Date:    "2024-01-01",
+			Type:        llmparser.TransactionExpense,
+			Amount:      9.5,
+			Account:     "1234",
+			Description: "Starbucks Coffee",
+			Date:        "2024-01-01",
 		}
 		mem.accounts["1234|"] = "wallet-main"
 	})
@@ -131,7 +131,7 @@ var _ = Describe("Enricher.Enrich", func() {
 
 	It("skips the LLM entirely on a high-confidence memory match", func() {
 		mem.pairs = append(mem.pairs, memory.TrainingPair{
-			RawTopic: "Starbucks Coffee", Name: "Starbucks", CategoryFK: "cat-food", WalletFK: "wallet-main",
+			RawDesc: "Starbucks Coffee", Name: "Starbucks", CategoryFK: "cat-food", WalletFK: "wallet-main",
 		})
 
 		result, err := enr.Enrich(ctx, exp)
@@ -147,7 +147,7 @@ var _ = Describe("Enricher.Enrich", func() {
 
 	It("calls the LLM with only the top-N candidates when there is no high-confidence match", func() {
 		mem.pairs = append(mem.pairs, memory.TrainingPair{
-			RawTopic: "Unrelated Merchant", Name: "Unrelated", CategoryFK: "cat-x", WalletFK: "wallet-main",
+			RawDesc: "Unrelated Merchant", Name: "Unrelated", CategoryFK: "cat-x", WalletFK: "wallet-main",
 		})
 		res.resolution = llmparser.Resolution{
 			Matched: true, MatchedIndex: -1,
@@ -165,7 +165,7 @@ var _ = Describe("Enricher.Enrich", func() {
 
 	It("uses the matched candidate's fields when the LLM points at one", func() {
 		mem.pairs = append(mem.pairs, memory.TrainingPair{
-			RawTopic: "Star Bucks", Name: "Starbucks", CategoryFK: "cat-food", SubCategoryFK: "sub-coffee", WalletFK: "wallet-main",
+			RawDesc: "Star Bucks", Name: "Starbucks", CategoryFK: "cat-food", SubCategoryFK: "sub-coffee", WalletFK: "wallet-main",
 		})
 		res.resolution = llmparser.Resolution{Matched: true, MatchedIndex: 0}
 
@@ -176,9 +176,9 @@ var _ = Describe("Enricher.Enrich", func() {
 		Expect(result.Expense.SubCategoryFK).To(Equal("sub-coffee"))
 	})
 
-	It("asks the user when the LLM cannot confidently resolve the topic", func() {
+	It("asks the user when the LLM cannot confidently resolve the description", func() {
 		mem.pairs = append(mem.pairs, memory.TrainingPair{
-			RawTopic: "Unrelated Merchant", Name: "Unrelated", CategoryFK: "cat-x", WalletFK: "wallet-main",
+			RawDesc: "Unrelated Merchant", Name: "Unrelated", CategoryFK: "cat-x", WalletFK: "wallet-main",
 		})
 		res.resolution = llmparser.Resolution{NeedsUserInput: true, Question: "What category is this?"}
 
@@ -186,7 +186,7 @@ var _ = Describe("Enricher.Enrich", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.NeedsUserInput).To(BeTrue())
-		// The question is always built from the raw SMS topic, not the LLM's freeform text, per
+		// The question is always built from the raw SMS description, not the LLM's freeform text, per
 		// llama-issue.md "Requests to user about expense name, category and wallet".
 		Expect(result.Question).To(ContainSubstring(`"Starbucks Coffee"`))
 		Expect(mem.saveCalls).To(Equal(0)) // nothing saved for this expense
@@ -198,7 +198,7 @@ var _ = Describe("Enricher.ResolveWithUserInput", func() {
 		ctx := context.Background()
 		mem := newFakeMemory()
 		enr := NewEnricher(mem, &fakeResolver{}, 5, 0.9)
-		exp := llmparser.Expense{Amount: 42, Account: "5555", Topic: "New Shop"}
+		exp := llmparser.Expense{Amount: 42, Account: "5555", Description: "New Shop"}
 
 		enriched, err := enr.ResolveWithUserInput(ctx, exp, "New Shop", "cat-new", "", "wallet-savings", false)
 

@@ -72,7 +72,7 @@ func (s *Store) Insert(ctx context.Context, exp handler.EnrichedExpense) (Insert
 			transaction_pk, name, amount, note, category_fk, sub_category_fk, wallet_fk,
 			date_created, date_time_modified, original_date_due, income, paid, skip_paid
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)`,
-		pk, exp.Name, signedAmount, exp.RawTopic, exp.CategoryFK, subCategory, exp.WalletFK,
+		pk, exp.Name, signedAmount, exp.RawDescription, exp.CategoryFK, subCategory, exp.WalletFK,
 		dateSeconds, now, dateSeconds, boolToInt(exp.Income),
 	)
 	if err != nil {

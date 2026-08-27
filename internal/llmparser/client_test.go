@@ -23,7 +23,7 @@ var _ = Describe("parseExpensesJSON", func() {
 		Expect(expenses[0].Type).To(Equal(TransactionExpense))
 		Expect(expenses[0].Amount).To(Equal(12.5))
 		Expect(expenses[0].Currency).To(Equal("USD"))
-		Expect(expenses[0].Topic).To(Equal("Coffee Shop"))
+		Expect(expenses[0].Description).To(Equal("Coffee Shop"))
 		Expect(expenses[0].ParseFailed).To(BeFalse())
 	})
 
@@ -45,8 +45,8 @@ var _ = Describe("parseExpensesJSON", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(expenses).To(HaveLen(2))
-		Expect(expenses[0].Topic).To(Equal("Shop A"))
-		Expect(expenses[1].Topic).To(Equal("Shop B"))
+		Expect(expenses[0].Description).To(Equal("Shop A"))
+		Expect(expenses[1].Description).To(Equal("Shop B"))
 	})
 
 	It("returns an error when no JSON object or array is present", func() {

@@ -3,7 +3,7 @@ package memory
 // TrainingPair is a learned mapping from a raw SMS topic (merchant/counterparty name) to the
 // enriched expense fields the agent should reuse for future transactions with a similar topic.
 type TrainingPair struct {
-	RawTopic      string
+	RawDesc       string
 	Name          string
 	CategoryFK    string
 	SubCategoryFK string
