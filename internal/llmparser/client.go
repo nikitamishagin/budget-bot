@@ -232,6 +232,7 @@ func parseExpensesJSON(content string) ([]Expense, error) {
 	if arrStr := extractJSONArray(content); arrStr != "" {
 		var expenses []Expense
 		if err := json.Unmarshal([]byte(arrStr), &expenses); err == nil {
+			cleanDescriptions(expenses)
 			return expenses, nil
 		}
 	}
@@ -245,7 +246,20 @@ func parseExpensesJSON(content string) ([]Expense, error) {
 	if err := json.Unmarshal([]byte(jsonStr), &expense); err != nil {
 		return nil, fmt.Errorf("unmarshal expense json: %w (raw: %s)", err, jsonStr)
 	}
-	return []Expense{expense}, nil
+	expenses := []Expense{expense}
+	cleanDescriptions(expenses)
+	return expenses, nil
+}
+
+// cleanDescriptions strips a trailing ">" (and any surrounding whitespace) from each expense's
+// description. The model is instructed to keep a ">" only when it is followed by more identifier
+// characters (e.g. "Wolt doo>972546"); whenever it ends up as the very last character instead, it
+// is always a decorative wrapping artifact from the bank's SMS layout rather than part of the
+// merchant name, so it is normalized away here regardless of what the model produced.
+func cleanDescriptions(expenses []Expense) {
+	for i := range expenses {
+		expenses[i].Description = strings.TrimRight(strings.TrimSpace(expenses[i].Description), ">")
+	}
 }
 
 // extractJSONArray returns the substring between the first '[' and the matching last ']',
