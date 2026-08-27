@@ -1,0 +1,235 @@
+{
+  "first-test-screenshot": [
+    {
+      "type": "expense",
+      "amount": 399.00,
+      "currency": "RSD",
+      "bank_account": "0746",
+      "date": "2026.08.25 04:10",
+      "description": "GLOVOAPP",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 1849.76,
+      "currency": "RSD",
+      "bank_account": "9279",
+      "date": "2026.08.25 18:02",
+      "description": "Wolt doo",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 399.00,
+      "currency": "RSD",
+      "bank_account": "9279",
+      "date": "2026.08.25 19:22",
+      "description": "Wolt doo",
+      "parse_failed": false
+    },
+    {
+      "type": "refund",
+      "amount": 1012.00,
+      "currency": "RSD",
+      "bank_account": "0746",
+      "date": "2026.08.26 10:10",
+      "description": "Temu.com",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 1469.00,
+      "currency": "RSD",
+      "bank_account": "0746",
+      "date": "2026.08.26 12:33",
+      "description": "Temu.com",
+      "parse_failed": false
+    }
+  ],
+  "second-test-screenshot": [
+    {
+      "type": "expense",
+      "amount": 2103.64,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.24 19:22",
+      "description": "LIDL 194 NOVI B",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 1566.96,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.24 19:47",
+      "description": "213 - MAXI 779",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 12.99,
+      "currency": "EUR",
+      "bank_account": "1391",
+      "date": "2026.08.25 09:45",
+      "description": "APPLE.COM/BILL",
+      "parse_failed": false
+    },
+    {
+      "type": "transfer",
+      "amount": 30000.00,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.25 12:30",
+      "description": "ATM ALTA MENJAC (cash withdrawal)",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 1000.00,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.25 13:57",
+      "description": "CRANEXDENT>BEOG",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 56.99,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.25 14:58",
+      "description": "215 - MAXI 5286",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 1036.98,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.25 18:27",
+      "description": "213 - MAXI 779",
+      "parse_failed": false
+    }
+  ],
+  "third-test-screenshot": [
+    {
+      "type": "expense",
+      "amount": 290.00,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.12 14:23",
+      "description": "A SPORT LESKOVA",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 2149.20,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.12 14:39",
+      "description": "J061>BEOGRAD N",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 2511.06,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.12 16:39",
+      "description": "Wolt doo>972546",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 1.00,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.12 17:17",
+      "description": "RSOFT ONLINE>BE",
+      "parse_failed": false
+    },
+    {
+      "type": "refund",
+      "amount": 1.00,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.12 17:19",
+      "description": "Storno placanja (RSOFT ONLINE)",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 7832.40,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.12 17:20",
+      "description": "Wolt doo>972546",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 4760.00,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.12 21:16",
+      "description": "RSOFT ONLINE>BE",
+      "parse_failed": false
+    }
+  ],
+  "fourth-test-screenshot": [
+    {
+      "type": "expense",
+      "amount": 894.45,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.20 12:31",
+      "description": "213 - MAXI 779",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 3264.87,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.20 18:06",
+      "description": "LIDL 194 NOVI B",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 290.00,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.21 13:19",
+      "description": "KAFETERIJA SANK",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 54.99,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.22 13:49",
+      "description": "213 - MAXI 179",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 1886.99,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.22 15:27",
+      "description": "APOTEKA 139>BEO",
+      "parse_failed": false
+    },
+    {
+      "type": "expense",
+      "amount": 217.00,
+      "currency": "RSD",
+      "bank_account": "1391",
+      "date": "2026.08.22 15:31",
+      "description": "LIDL 194 NOVI B",
+      "parse_failed": false
+    }
+  ]
+}
