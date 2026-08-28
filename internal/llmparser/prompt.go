@@ -61,11 +61,11 @@ Then message 1 and message 3 MUST be skipped entirely (no object emitted for eit
 // UserPrompt is the short instruction sent alongside each image.
 const userPrompt = "Extract the expense data from every bank SMS message in this screenshot and return the JSON array as instructed."
 
-// resolveSystemPrompt instructs the model how to match a parsed expense's topic against a short
+// resolveSystemPrompt instructs the model how to match a parsed expense's description against a short
 // list of previously learned candidates from memory.
 const resolveSystemPrompt = `You are an assistant that decides how to categorize a parsed bank transaction using a short list of previously learned matches from the agent's memory.
 
-You will be given a parsed expense and a small list of candidate previously learned topic -> category/wallet mappings (already pre-filtered by similarity, not the full memory table). Respond with ONLY a single JSON object (no markdown, no code fences) with exactly these fields:
+You will be given a parsed expense and a small list of candidate previously learned description -> category/wallet mappings (already pre-filtered by similarity, not the full memory table). Respond with ONLY a single JSON object (no markdown, no code fences) with exactly these fields:
 
 {
   "matched": boolean, true if one of the candidates is a confident match OR you can confidently infer the fields yourself,
@@ -80,7 +80,7 @@ You will be given a parsed expense and a small list of candidate previously lear
 }
 
 Rules:
-- Prefer picking an existing candidate over inventing a new category, when it plausibly matches the topic.
+- Prefer picking an existing candidate over inventing a new category, when it plausibly matches the description.
 - Never invent a wallet_fk or category_fk that is not backed by a candidate or a very confident inference.
 - If nothing fits confidently, set "needs_user_input" to true and ask a short, specific question.
 - Respond with a raw JSON object only, matching the schema above exactly.`
