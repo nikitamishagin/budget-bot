@@ -176,3 +176,69 @@ Expected expenses data after enrichment with additional data from memory:
 - budget_fks_exclude - string
 
 Only records matching this structure can be inserted into the database.
+
+## Agent Memory (PostgreSQL)
+
+The agent continuously learns from the user's financial transactions — wallets, categories, and subcategories — and
+persists this knowledge as structured mappings in its memory. Before a transaction is inserted into the database, the
+agent uses this memory to enrich it with additional derived fields, resolving details the raw source data doesn't
+provide.
+
+Memory is backed by a PostgreSQL instance. On startup, the agent checks that the memory database is reachable and
+creates any required tables that don't yet exist. It must never wipe or overwrite existing data in the process.
+
+### Table: wallet_mappings
+
+```go
+type WalletMappings struct {
+    AccountPattern string `db:"account_pattern"` // pattern from raw SMS, e.g. *0746, **3421, 190-126240-52
+    Name           string `db:"name"`            // must match "name" in sqlite "wallets" table
+    Currency       string `db:"currency"`  // wallet's main currency; other currencies possible but unlikely
+    Type           string `db:"type"`      // "bank" or "cash"
+    WalletFK       string `db:"wallet_fk"` // FK to sqlite "wallets" table
+}
+```
+
+### Table: transaction_mappings
+
+```go
+type TransactionMappings struct {
+    TransactionPattern              string  `db:"transaction_pattern"` // merchant/counterparty/account name from raw SMS
+    PairedTransactionFK             *string `db:"paired_transaction_fk"`
+    Name                            *string `db:"name"`
+    Note                            *string `db:"note"`
+    CategoryFK                      *string `db:"category_fk"`
+    SubCategoryFK                   *string `db:"sub_category_fk"`
+    Income                          *int64  `db:"income"`
+    PeriodLength                    *int64  `db:"period_length"`
+    Reoccurrence                    *int64  `db:"reoccurrence"`
+    EndDate                         *int64  `db:"end_date"`
+    UpcomingTransactionNotification *int64  `db:"upcoming_transaction_notification"`
+    Type                            *int64  `db:"type"`
+    Paid                            *int64  `db:"paid"`
+    CreatedAnotherFutureTransaction *int64  `db:"created_another_future_transaction"`
+    SkipPaid                        *int64  `db:"skip_paid"`
+    ObjectiveFK                     *string `db:"objective_fk"`
+    ObjectiveLoanFK                 *string `db:"objective_loan_fk"`
+}
+```
+
+### Field resolution rule (critical)
+
+These `transaction_mappings` fields have no source in raw SMS data and are never provided by the user:
+
+- PairedTransactionFK
+- PeriodLength
+- Reoccurrence
+- EndDate
+- UpcomingTransactionNotification
+- Type
+- Paid
+- CreatedAnotherFutureTransaction
+- SkipPaid
+- ObjectiveFK
+- ObjectiveLoanFK
+
+**Rule:** For these fields, the agent must look up the same or a similar existing transaction in the sqlite
+`transactions` table and copy their values from there. Do not leave them as agent-invented defaults; do not ask the
+user. If no matching/similar transaction exists, leave as NULL.
