@@ -239,6 +239,38 @@ These `transaction_mappings` fields have no source in raw SMS data and are never
 - ObjectiveFK
 - ObjectiveLoanFK
 
-**Rule:** For these fields, the agent must look up the same or a similar existing transaction in the sqlite
+Rule: For these fields, the agent must look up the same or a similar existing transaction in the sqlite
 `transactions` table and copy their values from there. Do not leave them as agent-invented defaults; do not ask the
 user. If no matching/similar transaction exists, leave as NULL.
+
+## Committing rules
+
+Follow this workflow for every change, step-by-step. Do not skip steps or batch them.
+
+1. Implement one logical change at a time (single feature/fix per commit).
+2. Lint: run `gofmt -l .` and `go vet ./...`. Fix any issues before proceeding.
+3. Test: run `go test ./...`. All tests must pass. If tests fail, fix the code — unless the change was significant
+   enough that the tests themselves are now outdated, in which case update the tests to match the new expected behavior.
+4. Diff review: show `git diff --stat` and a summary of what changed and why.
+5. Commit message: generate using the format below.
+6. Ask for approval: wait for explicit confirmation before running `git commit`.
+7. Never run `git push`. Pushing is always manual and done by me.
+
+```
+<type>(<scope>): <short summary>
+
+<body: what changed and why, 1-2 lines>
+```
+
+Commit message prompt:
+
+- Types: `feat`, `fix`, `refactor`, `test`, `chore`, `docs`.
+- Scope = affected package/module (e.g. `telegram`, `parser`, `memory`, `cashew-sync`).
+- Short summary must be no more than 50 characters.
+- Body is 1-2 short sentences.
+- Avoid overly verbose descriptions or unnecessary details.
+- Don't use colon and semicolon in the description.
+
+
+If lint or tests fail and cannot be fixed within the current change scope, stop and report the issue instead of
+committing.
