@@ -11,13 +11,13 @@ import (
 
 // MemoryStore is the subset of *memory.Store that the Enricher depends on.
 type MemoryStore interface {
-	FindBestMatch(ctx context.Context, description string) (memory.Candidate, bool, error)
-	TopCandidates(ctx context.Context, description string, n int) ([]memory.Candidate, error)
-	SaveTrainingPair(ctx context.Context, pair memory.TrainingPair) error
-	// ResolveAccount / SaveAccountMapping are keyed by (accountPattern, currency): a single card can
+	FindBestMatch(ctx context.Context, pattern string) (memory.Candidate, bool, error)
+	TopCandidates(ctx context.Context, pattern string, n int) ([]memory.Candidate, error)
+	SaveTransactionMapping(ctx context.Context, mapping memory.TransactionMappings) error
+	// ResolveWallet / SaveWalletMapping are keyed by (accountPattern, currency): a single card can
 	// produce expenses in several currencies that must map to different wallets.
-	ResolveAccount(ctx context.Context, accountPattern, currency string) (string, bool, error)
-	SaveAccountMapping(ctx context.Context, accountPattern, currency, walletFK string) error
+	ResolveWallet(ctx context.Context, accountPattern, currency string) (memory.WalletMappings, bool, error)
+	SaveWalletMapping(ctx context.Context, mapping memory.WalletMappings) error
 }
 
 // Resolver asks an LLM to match a parsed expense's description against a short list of memory
@@ -91,21 +91,16 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 	if err != nil {
 		return Result{}, err
 	}
+	if !walletKnown {
+		return Result{NeedsUserInput: true, Question: walletQuestion(exp.Account, exp.Currency)}, nil
+	}
 
 	best, ok, err := e.Memory.FindBestMatch(ctx, description)
 	if err != nil {
 		return Result{}, fmt.Errorf("find best memory match: %w", err)
 	}
 	if ok && best.Score >= e.HighConfidenceThreshold {
-		wallet := walletFK
-		if !walletKnown {
-			wallet = best.WalletFK
-		}
-		return Result{Expense: e.buildExpense(exp, best.TrainingPair, wallet)}, nil
-	}
-
-	if !walletKnown {
-		return Result{NeedsUserInput: true, Question: walletQuestion(exp.Account, exp.Currency)}, nil
+		return Result{Expense: e.buildExpense(exp, best.TransactionMappings, walletFK)}, nil
 	}
 
 	candidates, err := e.Memory.TopCandidates(ctx, description, e.TopN)
@@ -113,7 +108,7 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		return Result{}, fmt.Errorf("find top candidates: %w", err)
 	}
 
-	llmCandidates := toLLMCandidates(candidates)
+	llmCandidates := toLLMCandidates(candidates, walletFK)
 	if len(llmCandidates) == 0 && len(db) > 0 && db[0] != nil {
 		dbCandidates, err := db[0].FindCandidates(ctx, description, e.TopN)
 		if err != nil {
@@ -135,27 +130,26 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		return Result{NeedsUserInput: true, Question: NameQuestion(description)}, nil
 	}
 
-	pair := memory.TrainingPair{
-		RawDesc:       description,
-		Name:          resolution.Name,
-		CategoryFK:    resolution.CategoryFK,
-		SubCategoryFK: resolution.SubCategoryFK,
-		WalletFK:      walletFK,
-		Income:        resolution.Income,
+	mapping := memory.TransactionMappings{
+		TransactionPattern: description,
+		Name:               strPtr(resolution.Name),
+		CategoryFK:         strPtr(resolution.CategoryFK),
+		SubCategoryFK:      strPtrOrNil(resolution.SubCategoryFK),
+		Income:             boolPtr(resolution.Income),
 	}
 	if resolution.MatchedIndex >= 0 && resolution.MatchedIndex < len(llmCandidates) {
 		chosen := llmCandidates[resolution.MatchedIndex]
-		pair.Name = chosen.Name
-		pair.CategoryFK = chosen.CategoryFK
-		pair.SubCategoryFK = chosen.SubCategoryFK
-		pair.Income = chosen.Income
+		mapping.Name = strPtr(chosen.Name)
+		mapping.CategoryFK = strPtr(chosen.CategoryFK)
+		mapping.SubCategoryFK = strPtrOrNil(chosen.SubCategoryFK)
+		mapping.Income = boolPtr(chosen.Income)
 	}
 
-	if err := e.Memory.SaveTrainingPair(ctx, pair); err != nil {
-		return Result{}, fmt.Errorf("save training pair: %w", err)
+	if err := e.Memory.SaveTransactionMapping(ctx, mapping); err != nil {
+		return Result{}, fmt.Errorf("save transaction mapping: %w", err)
 	}
 
-	return Result{Expense: e.buildExpense(exp, pair, walletFK)}, nil
+	return Result{Expense: e.buildExpense(exp, mapping, walletFK)}, nil
 }
 
 // ResolveWithUserInput records the user-supplied enrichment fields for a previously ambiguous
@@ -168,43 +162,48 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 	}
 
 	if account := strings.TrimSpace(exp.Account); account != "" {
-		if err := e.Memory.SaveAccountMapping(ctx, account, exp.Currency, walletFK); err != nil {
-			return nil, fmt.Errorf("save account mapping: %w", err)
+		if err := e.Memory.SaveWalletMapping(ctx, memory.WalletMappings{
+			AccountPattern: account,
+			Currency:       exp.Currency,
+			WalletFK:       walletFK,
+		}); err != nil {
+			return nil, fmt.Errorf("save wallet mapping: %w", err)
 		}
 	}
 
 	description := strings.TrimSpace(exp.Description)
-	pair := memory.TrainingPair{
-		RawDesc:       description,
-		Name:          name,
-		CategoryFK:    categoryFK,
-		SubCategoryFK: subCategoryFK,
-		WalletFK:      walletFK,
-		Income:        income,
+	mapping := memory.TransactionMappings{
+		TransactionPattern: description,
+		Name:               strPtr(name),
+		CategoryFK:         strPtr(categoryFK),
+		SubCategoryFK:      strPtrOrNil(subCategoryFK),
+		Income:             boolPtr(income),
 	}
 	if description != "" {
-		if err := e.Memory.SaveTrainingPair(ctx, pair); err != nil {
-			return nil, fmt.Errorf("save training pair: %w", err)
+		if err := e.Memory.SaveTransactionMapping(ctx, mapping); err != nil {
+			return nil, fmt.Errorf("save transaction mapping: %w", err)
 		}
 	}
 
-	return e.buildExpense(exp, pair, walletFK), nil
+	return e.buildExpense(exp, mapping, walletFK), nil
 }
 
 // resolveWallet resolves a bank account/card identifier and currency from the SMS to a wallet,
-// using the static bank_account_mappings memory table. Currency is part of the lookup key
-// because a single card can produce expenses in several currencies, each mapped to a different
-// wallet.
+// using the static wallet_mappings memory table. Currency is part of the lookup key because a
+// single card can produce expenses in several currencies, each mapped to a different wallet.
 func (e *Enricher) resolveWallet(ctx context.Context, account, currency string) (walletFK string, ok bool, err error) {
 	account = strings.TrimSpace(account)
 	if account == "" {
 		return "", false, nil
 	}
-	walletFK, ok, err = e.Memory.ResolveAccount(ctx, account, currency)
+	wallet, ok, err := e.Memory.ResolveWallet(ctx, account, currency)
 	if err != nil {
-		return "", false, fmt.Errorf("resolve account: %w", err)
+		return "", false, fmt.Errorf("resolve wallet: %w", err)
 	}
-	return walletFK, ok, nil
+	if !ok {
+		return "", false, nil
+	}
+	return wallet.WalletFK, true, nil
 }
 
 // NameQuestion builds the strictly formatted question asked when the agent cannot confidently
@@ -236,29 +235,29 @@ func walletQuestion(rawAccount, currency string) string {
 	return fmt.Sprintf("Which wallet does account %q in %s belong to?", rawAccount, currency)
 }
 
-func (e *Enricher) buildExpense(exp llmparser.Expense, pair memory.TrainingPair, walletFK string) *EnrichedExpense {
+func (e *Enricher) buildExpense(exp llmparser.Expense, mapping memory.TransactionMappings, walletFK string) *EnrichedExpense {
 	return &EnrichedExpense{
-		Name:           pair.Name,
+		Name:           strVal(mapping.Name),
 		Amount:         exp.Amount,
-		CategoryFK:     pair.CategoryFK,
-		SubCategoryFK:  pair.SubCategoryFK,
+		CategoryFK:     strVal(mapping.CategoryFK),
+		SubCategoryFK:  strVal(mapping.SubCategoryFK),
 		WalletFK:       walletFK,
-		Income:         pair.Income || exp.Type == llmparser.TransactionIncome,
+		Income:         boolVal(mapping.Income) || exp.Type == llmparser.TransactionIncome,
 		RawDescription: exp.Description,
 		RawAccount:     exp.Account,
 		Date:           exp.Date,
 	}
 }
 
-func toLLMCandidates(candidates []memory.Candidate) []llmparser.Candidate {
+func toLLMCandidates(candidates []memory.Candidate, walletFK string) []llmparser.Candidate {
 	out := make([]llmparser.Candidate, 0, len(candidates))
 	for _, c := range candidates {
 		out = append(out, llmparser.Candidate{
-			Name:          c.Name,
-			CategoryFK:    c.CategoryFK,
-			SubCategoryFK: c.SubCategoryFK,
-			WalletFK:      c.WalletFK,
-			Income:        c.Income,
+			Name:          strVal(c.Name),
+			CategoryFK:    strVal(c.CategoryFK),
+			SubCategoryFK: strVal(c.SubCategoryFK),
+			WalletFK:      walletFK,
+			Income:        boolVal(c.Income),
 		})
 	}
 	return out
@@ -276,4 +275,42 @@ func dbToLLMCandidates(candidates []DBCandidate) []llmparser.Candidate {
 		})
 	}
 	return out
+}
+
+// strPtr returns a pointer to s, used to fill the nullable string fields of
+// memory.TransactionMappings.
+func strPtr(s string) *string {
+	return &s
+}
+
+// strPtrOrNil returns nil for an empty string, otherwise a pointer to it: used for the optional
+// sub_category_fk field, which should stay NULL rather than an empty string when not set.
+func strPtrOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// strVal dereferences a possibly-nil string pointer, returning "" when nil.
+func strVal(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// boolPtr returns a pointer to the int64 representation of b (1 for true, 0 for false), used to
+// fill the nullable income field of memory.TransactionMappings.
+func boolPtr(b bool) *int64 {
+	var v int64
+	if b {
+		v = 1
+	}
+	return &v
+}
+
+// boolVal dereferences a possibly-nil int64 pointer, returning false when nil or 0.
+func boolVal(v *int64) bool {
+	return v != nil && *v != 0
 }

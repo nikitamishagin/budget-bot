@@ -18,53 +18,53 @@ func TestHandler(t *testing.T) {
 
 // fakeMemory is an in-memory MemoryStore implementation for tests.
 type fakeMemory struct {
-	pairs        []memory.TrainingPair
-	accounts     map[string]string
+	mappings     []memory.TransactionMappings
+	wallets      map[string]memory.WalletMappings
 	saveCalls    int
 	saveAccounts int
 }
 
 func newFakeMemory() *fakeMemory {
-	return &fakeMemory{accounts: map[string]string{}}
+	return &fakeMemory{wallets: map[string]memory.WalletMappings{}}
 }
 
-func (f *fakeMemory) FindBestMatch(_ context.Context, description string) (memory.Candidate, bool, error) {
-	for _, p := range f.pairs {
-		if p.RawDesc == description {
-			return memory.Candidate{TrainingPair: p, Score: 1.0}, true, nil
+func (f *fakeMemory) FindBestMatch(_ context.Context, pattern string) (memory.Candidate, bool, error) {
+	for _, m := range f.mappings {
+		if m.TransactionPattern == pattern {
+			return memory.Candidate{TransactionMappings: m, Score: 1.0}, true, nil
 		}
 	}
-	if len(f.pairs) == 0 {
+	if len(f.mappings) == 0 {
 		return memory.Candidate{}, false, nil
 	}
-	return memory.Candidate{TrainingPair: f.pairs[0], Score: 0.3}, true, nil
+	return memory.Candidate{TransactionMappings: f.mappings[0], Score: 0.3}, true, nil
 }
 
 func (f *fakeMemory) TopCandidates(_ context.Context, _ string, n int) ([]memory.Candidate, error) {
 	var out []memory.Candidate
-	for i, p := range f.pairs {
+	for i, m := range f.mappings {
 		if i >= n {
 			break
 		}
-		out = append(out, memory.Candidate{TrainingPair: p, Score: 0.5})
+		out = append(out, memory.Candidate{TransactionMappings: m, Score: 0.5})
 	}
 	return out, nil
 }
 
-func (f *fakeMemory) SaveTrainingPair(_ context.Context, pair memory.TrainingPair) error {
+func (f *fakeMemory) SaveTransactionMapping(_ context.Context, mapping memory.TransactionMappings) error {
 	f.saveCalls++
-	f.pairs = append(f.pairs, pair)
+	f.mappings = append(f.mappings, mapping)
 	return nil
 }
 
-func (f *fakeMemory) ResolveAccount(_ context.Context, accountPattern, currency string) (string, bool, error) {
-	wallet, ok := f.accounts[accountPattern+"|"+currency]
+func (f *fakeMemory) ResolveWallet(_ context.Context, accountPattern, currency string) (memory.WalletMappings, bool, error) {
+	wallet, ok := f.wallets[accountPattern+"|"+currency]
 	return wallet, ok, nil
 }
 
-func (f *fakeMemory) SaveAccountMapping(_ context.Context, accountPattern, currency, walletFK string) error {
+func (f *fakeMemory) SaveWalletMapping(_ context.Context, mapping memory.WalletMappings) error {
 	f.saveAccounts++
-	f.accounts[accountPattern+"|"+currency] = walletFK
+	f.wallets[mapping.AccountPattern+"|"+mapping.Currency] = mapping
 	return nil
 }
 
@@ -103,7 +103,7 @@ var _ = Describe("Enricher.Enrich", func() {
 			Description: "Starbucks Coffee",
 			Date:        "2024-01-01",
 		}
-		mem.accounts["1234|"] = "wallet-main"
+		mem.wallets["1234|"] = memory.WalletMappings{AccountPattern: "1234", WalletFK: "wallet-main"}
 	})
 
 	It("asks for clarification when parsing failed", func() {
@@ -130,8 +130,8 @@ var _ = Describe("Enricher.Enrich", func() {
 	})
 
 	It("skips the LLM entirely on a high-confidence memory match", func() {
-		mem.pairs = append(mem.pairs, memory.TrainingPair{
-			RawDesc: "Starbucks Coffee", Name: "Starbucks", CategoryFK: "cat-food", WalletFK: "wallet-main",
+		mem.mappings = append(mem.mappings, memory.TransactionMappings{
+			TransactionPattern: "Starbucks Coffee", Name: strPtr("Starbucks"), CategoryFK: strPtr("cat-food"),
 		})
 
 		result, err := enr.Enrich(ctx, exp)
@@ -146,8 +146,8 @@ var _ = Describe("Enricher.Enrich", func() {
 	})
 
 	It("calls the LLM with only the top-N candidates when there is no high-confidence match", func() {
-		mem.pairs = append(mem.pairs, memory.TrainingPair{
-			RawDesc: "Unrelated Merchant", Name: "Unrelated", CategoryFK: "cat-x", WalletFK: "wallet-main",
+		mem.mappings = append(mem.mappings, memory.TransactionMappings{
+			TransactionPattern: "Unrelated Merchant", Name: strPtr("Unrelated"), CategoryFK: strPtr("cat-x"),
 		})
 		res.resolution = llmparser.Resolution{
 			Matched: true, MatchedIndex: -1,
@@ -160,12 +160,12 @@ var _ = Describe("Enricher.Enrich", func() {
 		Expect(res.calls).To(Equal(1))
 		Expect(result.NeedsUserInput).To(BeFalse())
 		Expect(result.Expense.CategoryFK).To(Equal("cat-food"))
-		Expect(mem.saveCalls).To(Equal(1)) // saved once after LLM resolution (seed pair was injected directly)
+		Expect(mem.saveCalls).To(Equal(1)) // saved once after LLM resolution (seed mapping was injected directly)
 	})
 
 	It("uses the matched candidate's fields when the LLM points at one", func() {
-		mem.pairs = append(mem.pairs, memory.TrainingPair{
-			RawDesc: "Star Bucks", Name: "Starbucks", CategoryFK: "cat-food", SubCategoryFK: "sub-coffee", WalletFK: "wallet-main",
+		mem.mappings = append(mem.mappings, memory.TransactionMappings{
+			TransactionPattern: "Star Bucks", Name: strPtr("Starbucks"), CategoryFK: strPtr("cat-food"), SubCategoryFK: strPtr("sub-coffee"),
 		})
 		res.resolution = llmparser.Resolution{Matched: true, MatchedIndex: 0}
 
@@ -177,8 +177,8 @@ var _ = Describe("Enricher.Enrich", func() {
 	})
 
 	It("asks the user when the LLM cannot confidently resolve the description", func() {
-		mem.pairs = append(mem.pairs, memory.TrainingPair{
-			RawDesc: "Unrelated Merchant", Name: "Unrelated", CategoryFK: "cat-x", WalletFK: "wallet-main",
+		mem.mappings = append(mem.mappings, memory.TransactionMappings{
+			TransactionPattern: "Unrelated Merchant", Name: strPtr("Unrelated"), CategoryFK: strPtr("cat-x"),
 		})
 		res.resolution = llmparser.Resolution{NeedsUserInput: true, Question: "What category is this?"}
 
@@ -207,10 +207,10 @@ var _ = Describe("Enricher.ResolveWithUserInput", func() {
 		Expect(mem.saveCalls).To(Equal(1))
 		Expect(mem.saveAccounts).To(Equal(1))
 
-		wallet, ok, err := mem.ResolveAccount(ctx, "5555", "")
+		wallet, ok, err := mem.ResolveWallet(ctx, "5555", "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ok).To(BeTrue())
-		Expect(wallet).To(Equal("wallet-savings"))
+		Expect(wallet.WalletFK).To(Equal("wallet-savings"))
 	})
 
 	It("returns an error when category or wallet is missing", func() {

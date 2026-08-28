@@ -1,7 +1,7 @@
 // Package memory implements the agent's Postgres-backed memory: learned mappings from raw SMS
-// topics to enriched expense data, and static bank account -> wallet mappings. It provides
-// exact/high-confidence matching (to skip the LLM entirely) and top-N fuzzy candidate search (to
-// keep LLM context small).
+// transaction patterns to enriched transaction data, and static bank account -> wallet mappings.
+// It provides exact/high-confidence matching (to skip the LLM entirely) and top-N fuzzy candidate
+// search (to keep LLM context small).
 package memory
 
 import (
@@ -57,19 +57,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
-// FindBestMatch returns the training pair whose raw topic is the most similar to a topic, along
-// with its trigram similarity score. ok is false when no training pair exists at all.
-func (s *Store) FindBestMatch(ctx context.Context, topic string) (candidate Candidate, ok bool, err error) {
+// FindBestMatch returns the transaction mapping whose pattern is the most similar to a pattern,
+// along with its trigram similarity score. ok is false when no mapping exists at all.
+func (s *Store) FindBestMatch(ctx context.Context, pattern string) (candidate Candidate, ok bool, err error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT raw_topic, name, category_fk, COALESCE(sub_category_fk, ''), wallet_fk, income,
-		       similarity(raw_topic, $1) AS score
-		FROM training_pairs
+		SELECT transaction_pattern, paired_transaction_fk, name, note, category_fk, sub_category_fk,
+		       income, period_length, reoccurrence, end_date, upcoming_transaction_notification,
+		       type, paid, created_another_future_transaction, skip_paid, objective_fk, objective_loan_fk,
+		       similarity(transaction_pattern, $1) AS score
+		FROM transaction_mappings
 		ORDER BY score DESC, hit_count DESC
 		LIMIT 1
-	`, topic)
+	`, pattern)
 
 	var c Candidate
-	if err := row.Scan(&c.RawDesc, &c.Name, &c.CategoryFK, &c.SubCategoryFK, &c.WalletFK, &c.Income, &c.Score); err != nil {
+	if err := scanTransactionMapping(row, &c.TransactionMappings, &c.Score); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Candidate{}, false, nil
 		}
@@ -78,21 +80,23 @@ func (s *Store) FindBestMatch(ctx context.Context, topic string) (candidate Cand
 	return c, true, nil
 }
 
-// TopCandidates returns up to n training pairs most similar to the topic, ordered by descending
-// similarity score. Only candidates with a non-zero similarity are returned.
-func (s *Store) TopCandidates(ctx context.Context, topic string, n int) ([]Candidate, error) {
+// TopCandidates returns up to n transaction mappings most similar to the pattern, ordered by
+// descending similarity score. Only candidates with a non-zero similarity are returned.
+func (s *Store) TopCandidates(ctx context.Context, pattern string, n int) ([]Candidate, error) {
 	if n <= 0 {
 		n = DefaultTopN
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT raw_topic, name, category_fk, COALESCE(sub_category_fk, ''), wallet_fk, income,
-		       similarity(raw_topic, $1) AS score
-		FROM training_pairs
-		WHERE similarity(raw_topic, $1) > 0
+		SELECT transaction_pattern, paired_transaction_fk, name, note, category_fk, sub_category_fk,
+		       income, period_length, reoccurrence, end_date, upcoming_transaction_notification,
+		       type, paid, created_another_future_transaction, skip_paid, objective_fk, objective_loan_fk,
+		       similarity(transaction_pattern, $1) AS score
+		FROM transaction_mappings
+		WHERE similarity(transaction_pattern, $1) > 0
 		ORDER BY score DESC, hit_count DESC
 		LIMIT $2
-	`, topic, n)
+	`, pattern, n)
 	if err != nil {
 		return nil, fmt.Errorf("query top candidates: %w", err)
 	}
@@ -101,7 +105,7 @@ func (s *Store) TopCandidates(ctx context.Context, topic string, n int) ([]Candi
 	var candidates []Candidate
 	for rows.Next() {
 		var c Candidate
-		if err := rows.Scan(&c.RawDesc, &c.Name, &c.CategoryFK, &c.SubCategoryFK, &c.WalletFK, &c.Income, &c.Score); err != nil {
+		if err := scanTransactionMapping(rows, &c.TransactionMappings, &c.Score); err != nil {
 			return nil, fmt.Errorf("scan candidate: %w", err)
 		}
 		candidates = append(candidates, c)
@@ -112,77 +116,105 @@ func (s *Store) TopCandidates(ctx context.Context, topic string, n int) ([]Candi
 	return candidates, nil
 }
 
-// SaveTrainingPair inserts or reinforces a learned topic -> enrichment mapping. If a pair with
-// the same raw topic, category, and wallet already exists, its hit_count is incremented instead of
-// creating a duplicate row.
-func (s *Store) SaveTrainingPair(ctx context.Context, pair TrainingPair) error {
-	topic := strings.TrimSpace(pair.RawDesc)
-	if topic == "" {
-		return fmt.Errorf("raw topic must not be empty")
-	}
-	if pair.CategoryFK == "" {
-		return fmt.Errorf("category_fk must not be empty")
-	}
-	if pair.WalletFK == "" {
-		return fmt.Errorf("wallet_fk must not be empty")
-	}
+// scanRow is the subset of pgx.Row/pgx.Rows needed to scan a transaction_mappings row.
+type scanRow interface {
+	Scan(dest ...any) error
+}
 
-	var subCategory *string
-	if pair.SubCategoryFK != "" {
-		subCategory = &pair.SubCategoryFK
+// scanTransactionMapping scans one transaction_mappings row (as selected by FindBestMatch and
+// TopCandidates, in that exact column order) into m and score.
+func scanTransactionMapping(row scanRow, m *TransactionMappings, score *float64) error {
+	return row.Scan(
+		&m.TransactionPattern, &m.PairedTransactionFK, &m.Name, &m.Note, &m.CategoryFK, &m.SubCategoryFK,
+		&m.Income, &m.PeriodLength, &m.Reoccurrence, &m.EndDate, &m.UpcomingTransactionNotification,
+		&m.Type, &m.Paid, &m.CreatedAnotherFutureTransaction, &m.SkipPaid, &m.ObjectiveFK, &m.ObjectiveLoanFK,
+		score,
+	)
+}
+
+// SaveTransactionMapping inserts or reinforces a learned pattern -> enrichment mapping. If a
+// mapping with the same transaction pattern already exists, it is updated in place and its
+// hit_count is incremented, rather than creating a duplicate row.
+func (s *Store) SaveTransactionMapping(ctx context.Context, m TransactionMappings) error {
+	pattern := strings.TrimSpace(m.TransactionPattern)
+	if pattern == "" {
+		return fmt.Errorf("transaction pattern must not be empty")
 	}
 
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO training_pairs (raw_topic, name, category_fk, sub_category_fk, wallet_fk, income)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (raw_topic, category_fk, wallet_fk) DO UPDATE
-		SET hit_count       = training_pairs.hit_count + 1,
-		    name            = EXCLUDED.name,
-		    sub_category_fk = EXCLUDED.sub_category_fk,
-		    income          = EXCLUDED.income,
-		    updated_at      = now()
-	`, topic, pair.Name, pair.CategoryFK, subCategory, pair.WalletFK, pair.Income)
+		INSERT INTO transaction_mappings (
+			transaction_pattern, paired_transaction_fk, name, note, category_fk, sub_category_fk,
+			income, period_length, reoccurrence, end_date, upcoming_transaction_notification,
+			type, paid, created_another_future_transaction, skip_paid, objective_fk, objective_loan_fk
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		ON CONFLICT (transaction_pattern) DO UPDATE
+		SET hit_count                          = transaction_mappings.hit_count + 1,
+		    paired_transaction_fk              = EXCLUDED.paired_transaction_fk,
+		    name                               = EXCLUDED.name,
+		    note                               = EXCLUDED.note,
+		    category_fk                        = EXCLUDED.category_fk,
+		    sub_category_fk                    = EXCLUDED.sub_category_fk,
+		    income                             = EXCLUDED.income,
+		    period_length                      = EXCLUDED.period_length,
+		    reoccurrence                       = EXCLUDED.reoccurrence,
+		    end_date                           = EXCLUDED.end_date,
+		    upcoming_transaction_notification  = EXCLUDED.upcoming_transaction_notification,
+		    type                               = EXCLUDED.type,
+		    paid                               = EXCLUDED.paid,
+		    created_another_future_transaction = EXCLUDED.created_another_future_transaction,
+		    skip_paid                          = EXCLUDED.skip_paid,
+		    objective_fk                       = EXCLUDED.objective_fk,
+		    objective_loan_fk                  = EXCLUDED.objective_loan_fk,
+		    updated_at                         = now()
+	`, pattern, m.PairedTransactionFK, m.Name, m.Note, m.CategoryFK, m.SubCategoryFK,
+		m.Income, m.PeriodLength, m.Reoccurrence, m.EndDate, m.UpcomingTransactionNotification,
+		m.Type, m.Paid, m.CreatedAnotherFutureTransaction, m.SkipPaid, m.ObjectiveFK, m.ObjectiveLoanFK)
 	if err != nil {
-		return fmt.Errorf("save training pair: %w", err)
+		return fmt.Errorf("save transaction mapping: %w", err)
 	}
 	return nil
 }
 
-// ResolveAccount looks up the wallet a bank account/card identifier and currency combination is
+// ResolveWallet looks up the wallet a bank account/card identifier and currency combination is
 // mapped to. Mappings are keyed by (account, currency) since a single card can produce expenses
 // in several currencies that must map to different wallets. ok is false when no mapping exists.
-func (s *Store) ResolveAccount(ctx context.Context, accountPattern, currency string) (walletFK string, ok bool, err error) {
+func (s *Store) ResolveWallet(ctx context.Context, accountPattern, currency string) (WalletMappings, bool, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT wallet_fk FROM bank_account_mappings WHERE account_pattern = $1 AND currency = $2
+		SELECT account_pattern, currency, name, type, wallet_fk
+		FROM wallet_mappings WHERE account_pattern = $1 AND currency = $2
 	`, accountPattern, currency)
 
-	if err := row.Scan(&walletFK); err != nil {
+	var w WalletMappings
+	if err := row.Scan(&w.AccountPattern, &w.Currency, &w.Name, &w.Type, &w.WalletFK); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", false, nil
+			return WalletMappings{}, false, nil
 		}
-		return "", false, fmt.Errorf("resolve account: %w", err)
+		return WalletMappings{}, false, fmt.Errorf("resolve wallet: %w", err)
 	}
-	return walletFK, true, nil
+	return w, true, nil
 }
 
-// SaveAccountMapping inserts or updates the wallet an (account, currency) combination maps to.
-func (s *Store) SaveAccountMapping(ctx context.Context, accountPattern, currency, walletFK string) error {
-	if strings.TrimSpace(accountPattern) == "" {
+// SaveWalletMapping inserts or updates the wallet an (account, currency) combination maps to.
+func (s *Store) SaveWalletMapping(ctx context.Context, m WalletMappings) error {
+	if strings.TrimSpace(m.AccountPattern) == "" {
 		return fmt.Errorf("account pattern must not be empty")
 	}
-	if walletFK == "" {
+	if m.WalletFK == "" {
 		return fmt.Errorf("wallet_fk must not be empty")
 	}
 
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO bank_account_mappings (account_pattern, currency, wallet_fk)
-		VALUES ($1, $2, $3)
+		INSERT INTO wallet_mappings (account_pattern, currency, name, type, wallet_fk)
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (account_pattern, currency) DO UPDATE
-		SET wallet_fk  = EXCLUDED.wallet_fk,
+		SET name       = EXCLUDED.name,
+		    type       = EXCLUDED.type,
+		    wallet_fk  = EXCLUDED.wallet_fk,
 		    updated_at = now()
-	`, accountPattern, currency, walletFK)
+	`, m.AccountPattern, m.Currency, m.Name, m.Type, m.WalletFK)
 	if err != nil {
-		return fmt.Errorf("save account mapping: %w", err)
+		return fmt.Errorf("save wallet mapping: %w", err)
 	}
 	return nil
 }

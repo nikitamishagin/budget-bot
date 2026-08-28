@@ -10,6 +10,7 @@ import (
 
 	"github.com/nikitamishagin/budget-bot/internal/handler"
 	"github.com/nikitamishagin/budget-bot/internal/llmparser"
+	"github.com/nikitamishagin/budget-bot/internal/memory"
 	"github.com/nikitamishagin/budget-bot/internal/store"
 )
 
@@ -116,20 +117,20 @@ func (f *fakeEnricher) ResolveWithUserInput(_ context.Context, _ llmparser.Expen
 
 // fakeAccounts is an in-memory AccountResolver for tests.
 type fakeAccounts struct {
-	wallets map[string]string
+	wallets map[string]memory.WalletMappings
 }
 
 func newFakeAccounts() *fakeAccounts {
-	return &fakeAccounts{wallets: map[string]string{}}
+	return &fakeAccounts{wallets: map[string]memory.WalletMappings{}}
 }
 
-func (f *fakeAccounts) ResolveAccount(_ context.Context, accountPattern, currency string) (string, bool, error) {
+func (f *fakeAccounts) ResolveWallet(_ context.Context, accountPattern, currency string) (memory.WalletMappings, bool, error) {
 	w, ok := f.wallets[accountPattern+"|"+currency]
 	return w, ok, nil
 }
 
-func (f *fakeAccounts) SaveAccountMapping(_ context.Context, accountPattern, currency, walletFK string) error {
-	f.wallets[accountPattern+"|"+currency] = walletFK
+func (f *fakeAccounts) SaveWalletMapping(_ context.Context, mapping memory.WalletMappings) error {
+	f.wallets[mapping.AccountPattern+"|"+mapping.Currency] = mapping
 	return nil
 }
 
@@ -254,14 +255,14 @@ var _ = Describe("Bot.HandleText", func() {
 		enricher.result = handler.Result{Expense: &handler.EnrichedExpense{Name: "Unknown Shop", CategoryFK: "cat-x", WalletFK: "wallet-main"}}
 		bot.HandleText(context.Background(), 1, "wallet-main")
 
-		Expect(accounts.wallets["1234|"]).To(Equal("wallet-main"))
+		Expect(accounts.wallets["1234|"].WalletFK).To(Equal("wallet-main"))
 		Expect(sender.last()).To(ContainSubstring("Save these transactions?"))
 	})
 
 	It("asks for name, category, and subcategory separately, saving each into the correct field", func() {
 		sender := &fakeSender{}
 		accounts := newFakeAccounts()
-		accounts.wallets["1234|"] = "wallet-main"
+		accounts.wallets["1234|"] = memory.WalletMappings{AccountPattern: "1234", WalletFK: "wallet-main"}
 		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "What is the name of the \"Unknown Shop\" expense?"}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Unknown Shop", Account: "1234"}}}
 		bot := newTestBot(sender, parser, enricher, accounts, []string{"alice"})

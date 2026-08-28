@@ -9,6 +9,7 @@ import (
 
 	"github.com/nikitamishagin/budget-bot/internal/handler"
 	"github.com/nikitamishagin/budget-bot/internal/llmparser"
+	"github.com/nikitamishagin/budget-bot/internal/memory"
 	"github.com/nikitamishagin/budget-bot/internal/store"
 )
 
@@ -35,8 +36,8 @@ type ExpenseWriter interface {
 // saved bank account -> wallet mapping. Mappings are keyed by (account, currency) since a single
 // card can produce expenses in several currencies that must map to different wallets.
 type AccountResolver interface {
-	ResolveAccount(ctx context.Context, accountPattern, currency string) (string, bool, error)
-	SaveAccountMapping(ctx context.Context, accountPattern, currency, walletFK string) error
+	ResolveWallet(ctx context.Context, accountPattern, currency string) (memory.WalletMappings, bool, error)
+	SaveWalletMapping(ctx context.Context, mapping memory.WalletMappings) error
 }
 
 // Sender is the subset of *tgbotapi.BotAPI the bot depends on, kept minimal for testability.

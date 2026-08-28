@@ -25,6 +25,14 @@ func testDSN() string {
 	return "postgres://devuser:devpass@127.0.0.1:5432/expense_agent?sslmode=disable"
 }
 
+func strPtr(s string) *string {
+	return &s
+}
+
+func int64Ptr(v int64) *int64 {
+	return &v
+}
+
 var _ = Describe("Store", func() {
 	var (
 		ctx   context.Context
@@ -44,11 +52,11 @@ var _ = Describe("Store", func() {
 		DeferCleanup(store.Close)
 
 		Expect(store.Migrate(ctx)).To(Succeed())
-		_, err = store.pool.Exec(ctx, "TRUNCATE training_pairs, bank_account_mappings")
+		_, err = store.pool.Exec(ctx, "TRUNCATE transaction_mappings, wallet_mappings")
 		Expect(err).NotTo(HaveOccurred())
 	})
 
-	Describe("SaveTrainingPair and FindBestMatch", func() {
+	Describe("SaveTransactionMapping and FindBestMatch", func() {
 		It("returns no match when memory is empty", func() {
 			_, ok, err := store.FindBestMatch(ctx, "Starbucks")
 
@@ -56,41 +64,81 @@ var _ = Describe("Store", func() {
 			Expect(ok).To(BeFalse())
 		})
 
-		It("finds an exact topic match with score 1", func() {
-			Expect(store.SaveTrainingPair(ctx, TrainingPair{
-				RawDesc:    "Starbucks Coffee",
-				Name:       "Starbucks",
-				CategoryFK: "cat-food",
-				WalletFK:   "wallet-main",
+		It("finds an exact pattern match with score 1", func() {
+			Expect(store.SaveTransactionMapping(ctx, TransactionMappings{
+				TransactionPattern: "Starbucks Coffee",
+				Name:               strPtr("Starbucks"),
+				CategoryFK:         strPtr("cat-food"),
 			})).To(Succeed())
 
 			candidate, ok, err := store.FindBestMatch(ctx, "Starbucks Coffee")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ok).To(BeTrue())
-			Expect(candidate.CategoryFK).To(Equal("cat-food"))
-			Expect(candidate.WalletFK).To(Equal("wallet-main"))
+			Expect(candidate.CategoryFK).NotTo(BeNil())
+			Expect(*candidate.CategoryFK).To(Equal("cat-food"))
 			Expect(candidate.Score).To(BeNumerically(">=", HighConfidenceThreshold))
 		})
 
-		It("increments hit_count when saving the same pair again", func() {
-			pair := TrainingPair{
-				RawDesc:    "Uber Trip",
-				Name:       "Uber",
-				CategoryFK: "cat-transport",
-				WalletFK:   "wallet-main",
-			}
-			Expect(store.SaveTrainingPair(ctx, pair)).To(Succeed())
-			Expect(store.SaveTrainingPair(ctx, pair)).To(Succeed())
+		It("leaves fields with no source in raw SMS data as nil when not provided", func() {
+			Expect(store.SaveTransactionMapping(ctx, TransactionMappings{
+				TransactionPattern: "Uber Trip",
+				Name:               strPtr("Uber"),
+				CategoryFK:         strPtr("cat-transport"),
+			})).To(Succeed())
 
-			var hitCount int
-			row := store.pool.QueryRow(ctx, "SELECT hit_count FROM training_pairs WHERE raw_topic = $1", "Uber Trip")
-			Expect(row.Scan(&hitCount)).To(Succeed())
-			Expect(hitCount).To(Equal(2))
+			candidate, ok, err := store.FindBestMatch(ctx, "Uber Trip")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ok).To(BeTrue())
+			Expect(candidate.PairedTransactionFK).To(BeNil())
+			Expect(candidate.PeriodLength).To(BeNil())
+			Expect(candidate.ObjectiveFK).To(BeNil())
 		})
 
-		It("rejects a pair with an empty raw topic", func() {
-			err := store.SaveTrainingPair(ctx, TrainingPair{CategoryFK: "c", WalletFK: "w"})
+		It("copies fields resolved from a similar sqlite transaction when provided", func() {
+			Expect(store.SaveTransactionMapping(ctx, TransactionMappings{
+				TransactionPattern: "Rent Payment",
+				Name:               strPtr("Rent"),
+				CategoryFK:         strPtr("cat-housing"),
+				PeriodLength:       int64Ptr(1),
+				Reoccurrence:       int64Ptr(2),
+				Type:               int64Ptr(3),
+			})).To(Succeed())
+
+			candidate, ok, err := store.FindBestMatch(ctx, "Rent Payment")
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ok).To(BeTrue())
+			Expect(candidate.PeriodLength).NotTo(BeNil())
+			Expect(*candidate.PeriodLength).To(Equal(int64(1)))
+			Expect(*candidate.Reoccurrence).To(Equal(int64(2)))
+			Expect(*candidate.Type).To(Equal(int64(3)))
+		})
+
+		It("updates an existing mapping instead of creating a duplicate row", func() {
+			mapping := TransactionMappings{
+				TransactionPattern: "Uber Trip",
+				Name:               strPtr("Uber"),
+				CategoryFK:         strPtr("cat-transport"),
+			}
+			Expect(store.SaveTransactionMapping(ctx, mapping)).To(Succeed())
+			mapping.CategoryFK = strPtr("cat-travel")
+			Expect(store.SaveTransactionMapping(ctx, mapping)).To(Succeed())
+
+			var hitCount int
+			row := store.pool.QueryRow(ctx, "SELECT hit_count FROM transaction_mappings WHERE transaction_pattern = $1", "Uber Trip")
+			Expect(row.Scan(&hitCount)).To(Succeed())
+			Expect(hitCount).To(Equal(2))
+
+			candidate, ok, err := store.FindBestMatch(ctx, "Uber Trip")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ok).To(BeTrue())
+			Expect(*candidate.CategoryFK).To(Equal("cat-travel"))
+		})
+
+		It("rejects a mapping with an empty transaction pattern", func() {
+			err := store.SaveTransactionMapping(ctx, TransactionMappings{CategoryFK: strPtr("c")})
 
 			Expect(err).To(HaveOccurred())
 		})
@@ -98,14 +146,14 @@ var _ = Describe("Store", func() {
 
 	Describe("TopCandidates", func() {
 		BeforeEach(func() {
-			Expect(store.SaveTrainingPair(ctx, TrainingPair{
-				RawDesc: "Amazon Marketplace", Name: "Amazon", CategoryFK: "cat-shopping", WalletFK: "wallet-main",
+			Expect(store.SaveTransactionMapping(ctx, TransactionMappings{
+				TransactionPattern: "Amazon Marketplace", Name: strPtr("Amazon"), CategoryFK: strPtr("cat-shopping"),
 			})).To(Succeed())
-			Expect(store.SaveTrainingPair(ctx, TrainingPair{
-				RawDesc: "Amazon Prime Video", Name: "Amazon Prime", CategoryFK: "cat-subscriptions", WalletFK: "wallet-main",
+			Expect(store.SaveTransactionMapping(ctx, TransactionMappings{
+				TransactionPattern: "Amazon Prime Video", Name: strPtr("Amazon Prime"), CategoryFK: strPtr("cat-subscriptions"),
 			})).To(Succeed())
-			Expect(store.SaveTrainingPair(ctx, TrainingPair{
-				RawDesc: "Local Grocery Store", Name: "Grocery", CategoryFK: "cat-food", WalletFK: "wallet-main",
+			Expect(store.SaveTransactionMapping(ctx, TransactionMappings{
+				TransactionPattern: "Local Grocery Store", Name: strPtr("Grocery"), CategoryFK: strPtr("cat-food"),
 			})).To(Succeed())
 		})
 
@@ -126,7 +174,7 @@ var _ = Describe("Store", func() {
 			Expect(candidates).To(HaveLen(1))
 		})
 
-		It("does not dump unrelated rows for a completely different topic", func() {
+		It("does not dump unrelated rows for a completely different pattern", func() {
 			candidates, err := store.TopCandidates(ctx, "zzz-completely-unrelated-xyz", 5)
 
 			Expect(err).NotTo(HaveOccurred())
@@ -134,48 +182,70 @@ var _ = Describe("Store", func() {
 		})
 	})
 
-	Describe("SaveAccountMapping and ResolveAccount", func() {
+	Describe("SaveWalletMapping and ResolveWallet", func() {
 		It("returns not found for an unknown account", func() {
-			_, ok, err := store.ResolveAccount(ctx, "**** 1234", "USD")
+			_, ok, err := store.ResolveWallet(ctx, "**** 1234", "USD")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ok).To(BeFalse())
 		})
 
-		It("saves and resolves an account mapping", func() {
-			Expect(store.SaveAccountMapping(ctx, "**** 1234", "USD", "wallet-checking")).To(Succeed())
+		It("saves and resolves a wallet mapping", func() {
+			Expect(store.SaveWalletMapping(ctx, WalletMappings{
+				AccountPattern: "**** 1234", Currency: "USD", Name: "Checking", Type: "bank", WalletFK: "wallet-checking",
+			})).To(Succeed())
 
-			walletFK, ok, err := store.ResolveAccount(ctx, "**** 1234", "USD")
+			wallet, ok, err := store.ResolveWallet(ctx, "**** 1234", "USD")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ok).To(BeTrue())
-			Expect(walletFK).To(Equal("wallet-checking"))
+			Expect(wallet.WalletFK).To(Equal("wallet-checking"))
 		})
 
 		It("updates the wallet when the mapping already exists", func() {
-			Expect(store.SaveAccountMapping(ctx, "**** 1234", "USD", "wallet-checking")).To(Succeed())
-			Expect(store.SaveAccountMapping(ctx, "**** 1234", "USD", "wallet-savings")).To(Succeed())
+			Expect(store.SaveWalletMapping(ctx, WalletMappings{
+				AccountPattern: "**** 1234", Currency: "USD", Name: "Checking", Type: "bank", WalletFK: "wallet-checking",
+			})).To(Succeed())
+			Expect(store.SaveWalletMapping(ctx, WalletMappings{
+				AccountPattern: "**** 1234", Currency: "USD", Name: "Savings", Type: "bank", WalletFK: "wallet-savings",
+			})).To(Succeed())
 
-			walletFK, ok, err := store.ResolveAccount(ctx, "**** 1234", "USD")
+			wallet, ok, err := store.ResolveWallet(ctx, "**** 1234", "USD")
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ok).To(BeTrue())
-			Expect(walletFK).To(Equal("wallet-savings"))
+			Expect(wallet.WalletFK).To(Equal("wallet-savings"))
 		})
 
 		It("maps the same account to different wallets depending on currency", func() {
-			Expect(store.SaveAccountMapping(ctx, "TBC ****", "RSD", "wallet-rsd")).To(Succeed())
-			Expect(store.SaveAccountMapping(ctx, "TBC ****", "USD", "wallet-usd")).To(Succeed())
+			Expect(store.SaveWalletMapping(ctx, WalletMappings{
+				AccountPattern: "TBC ****", Currency: "RSD", Name: "TBC RSD", Type: "bank", WalletFK: "wallet-rsd",
+			})).To(Succeed())
+			Expect(store.SaveWalletMapping(ctx, WalletMappings{
+				AccountPattern: "TBC ****", Currency: "USD", Name: "TBC USD", Type: "bank", WalletFK: "wallet-usd",
+			})).To(Succeed())
 
-			rsdWallet, ok, err := store.ResolveAccount(ctx, "TBC ****", "RSD")
+			rsdWallet, ok, err := store.ResolveWallet(ctx, "TBC ****", "RSD")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ok).To(BeTrue())
-			Expect(rsdWallet).To(Equal("wallet-rsd"))
+			Expect(rsdWallet.WalletFK).To(Equal("wallet-rsd"))
 
-			usdWallet, ok, err := store.ResolveAccount(ctx, "TBC ****", "USD")
+			usdWallet, ok, err := store.ResolveWallet(ctx, "TBC ****", "USD")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ok).To(BeTrue())
-			Expect(usdWallet).To(Equal("wallet-usd"))
+			Expect(usdWallet.WalletFK).To(Equal("wallet-usd"))
+		})
+
+		It("rejects a mapping with an empty account pattern", func() {
+			err := store.SaveWalletMapping(ctx, WalletMappings{WalletFK: "wallet-x"})
+
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("rejects a mapping with an empty wallet_fk", func() {
+			err := store.SaveWalletMapping(ctx, WalletMappings{AccountPattern: "1234"})
+
+			Expect(err).To(HaveOccurred())
 		})
 	})
 })
