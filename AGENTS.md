@@ -141,41 +141,87 @@ Expected raw data from LLM:
 - parse_failed - bool
 - failure_reason - string, omitempty
 
-Expected expenses data after enrichment with additional data from memory:
+## Enrichment Process
 
-- transaction_pk - string
-- paired_transaction_fk - string
-- name - string
-- amount - float64
-- note - string
-- category_fk - string
-- sub_category_fk - string
-- wallet_fk - string
-- date_created - int64
-- date_time_modified - int64
-- original_date_due - int64
-- income - bool
-- period_length - int64
-- reoccurrence - int64
-- end_date - int64
-- upcoming_transaction_notification - bool
-- type - int64
-- paid - bool
-- created_another_future_transaction - bool
-- skip_paid - bool
-- method_added - int64
-- transaction_owner_email - string
-- transaction_original_owner_email - string
-- shared_key - string
-- shared_old_key - string
-- shared_status - int64
-- shared_date_updated - int64
-- shared_reference_budget_pk - string
-- objective_fk - string
-- objective_loan_fk - string
-- budget_fks_exclude - string
+The agent enriches each raw transaction with data from memory and the SQLite database, processing transactions one by
+one (not batched). Enrichment prepares a transaction for insertion into the SQLite database. During this process, the
+agent also learns new information and persists it to memory.
 
-Only records matching this structure can be inserted into the database.
+### SQLite tables used for enrichment and learning
+
+- `associated_titles` — maps expense title to category FK.
+- `categories` — maps category name to primary key; also links subcategories to their main category.
+- `transactions` — main transactions table.
+- `wallets` — maps wallet name to key.
+
+### Raw SMS data (before enrichment)
+
+```go
+type Expense struct {
+	Type TransactionType `json:"type"`      // Classifies the transaction, see TransactionType constants.
+	Amount float64 `json:"amount"`          // Transaction amount as printed in the SMS (always positive).
+	Currency string `json:"currency"`       // ISO 4217 currency code, e.g. "USD", "RUB".
+	Account string `json:"bank_account"`    // Bank account/card identifier from the SMS (e.g. last 4 digits).
+	Date string `json:"date"`               // Transaction date/time as printed, RFC3339 if determinable, else as-is.
+	Description string `json:"description"` // Merchant/counterparty name, or the other account for transfers.
+	ParseFailed bool `json:"parse_failed"`  // True if the model could not confidently extract data from the image.
+	FailureReason string `json:"failure_reason,omitempty"` // Why parsing failed; empty when ParseFailed is false.
+}
+```
+
+### Enriched expense (after enrichment)
+
+```go
+type EnrichedExpense struct {
+	// FK marking which transaction is paired with another. Used only for wallet-to-wallet transfers.
+	PairedTransactionFK *string `db:"paired_transaction_fk"`
+	// Transaction name. Look up in sqlite "associated_titles" (by title) or agent memory first.
+	// If no exact match, resolve via LLM (ResolveTopic) or user input (ResolveWithUserInput).
+	Name *string `db:"name"`
+	// Transaction amount. Expenses are always negative, income is positive.
+	Amount float64 `db:"amount"`
+	// Raw merchant/counterparty description from the SMS data.
+	Note *string `db:"note"`
+	// Category FK. Look up in sqlite "categories" table or agent memory.
+	CategoryFK *string `db:"category_fk"`
+	// Subcategory FK. Look up in sqlite "categories" table or agent memory.
+	SubCategoryFK *string `db:"sub_category_fk"`
+	// Wallet FK from the sqlite "wallets" table.
+	WalletFK *string `db:"wallet_fk"`
+	// Date the transaction was completed (timestamp format, no seconds).
+	DateCreated int64 `db:"date_created"`
+	// Date the agent handled the transaction (timestamp format, no seconds).
+	DateTimeModified int64 `db:"date_time_modified"`
+	// Date from the matching/similar transaction in the sqlite database.
+	OriginalDateDue *int64 `db:"original_date_due"`
+	// Boolean as int (0 or 1).
+	Income *int64 `db:"income"`
+	// Period length in units defined by Reoccurrence (days, weeks, months, etc.).
+	PeriodLength *int64 `db:"period_length"`
+	// Reoccurrence key. Must be resolved from the sqlite database.
+	Reoccurrence *int64 `db:"reoccurrence"`
+	EndDate                         *int64  `db:"end_date"`
+	UpcomingTransactionNotification *int64  `db:"upcoming_transaction_notification"`
+	Type                            *int64  `db:"type"`
+	// 1 if the transaction was completed; 0 if it's a future transaction.
+	Paid *int64 `db:"paid"`
+	CreatedAnotherFutureTransaction *int64  `db:"created_another_future_transaction"`
+	SkipPaid                        *int64  `db:"skip_paid"`
+	MethodAdded                     *int64  `db:"method_added"`
+	TransactionOwnerEmail           *string `db:"transaction_owner_email"`
+	TransactionOriginalOwnerEmail   *string `db:"transaction_original_owner_email"`
+	SharedKey                       *string `db:"shared_key"`
+	SharedOldKey                    *string `db:"shared_old_key"`
+	SharedStatus                    *int64  `db:"shared_status"`
+	SharedDateUpdated               *int64  `db:"shared_date_updated"`
+	SharedReferenceBudgetPK         *string `db:"shared_reference_budget_pk"`
+	ObjectiveFK                     *string `db:"objective_fk"`
+	ObjectiveLoanFK                 *string `db:"objective_loan_fk"`
+	BudgetFksExclude                *string `db:"budget_fks_exclude"`
+}
+```
+
+All uncommented keys must be obtained from the SQLite database.
 
 ## Agent Memory (PostgreSQL)
 
@@ -270,7 +316,6 @@ Commit message prompt:
 - Body is 1-2 short sentences.
 - Avoid overly verbose descriptions or unnecessary details.
 - Don't use colon and semicolon in the description.
-
 
 If lint or tests fail and cannot be fixed within the current change scope, stop and report the issue instead of
 committing.
