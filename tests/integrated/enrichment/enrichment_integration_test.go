@@ -2,10 +2,11 @@
 
 // Package enrichment_test contains integration tests for the raw-SMS-to-enriched-expense
 // pipeline (internal/handler.Enricher), wired against real backends: a Postgres agent memory
-// (internal/memory) and a Cashew-shaped SQLite file built from testdata/test-transaction-data.csv,
-// plus a real, locally running LLM inference server (internal/llmparser.Client) for the cases
-// that require it. They are excluded from the default `go test ./...` run via the "integration"
-// build tag, since they require external infrastructure. Run them explicitly with:
+// (internal/memory) and a Cashew-shaped SQLite file copied from testdata/test-transaction-data.sql
+// (a real, minimal Cashew export), plus a real, locally running LLM inference server
+// (internal/llmparser.Client) for the cases that require it. They are excluded from the default
+// `go test ./...` run via the "integration" build tag since they require external
+// infrastructure. Run them explicitly with:
 //
 //	go test -tags=integration ./tests/integrated/enrichment/...
 //
@@ -16,14 +17,11 @@ package enrichment_test
 
 import (
 	"context"
-	"database/sql"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
@@ -31,7 +29,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "modernc.org/sqlite"
 
 	"github.com/nikitamishagin/budget-bot/internal/config"
 	"github.com/nikitamishagin/budget-bot/internal/handler"
@@ -49,23 +46,26 @@ func TestEnrichmentIntegration(t *testing.T) {
 // locally running llama.cpp server; it can be overridden via BUDGET_BOT_TEST_CONFIG.
 const defaultTestConfigPath = "../../../config.example.yaml"
 
-// rawDataPath and csvDataPath point at the test fixtures for this suite, kept under testdata/
-// (a Go-conventional directory name that the toolchain never treats as a package) rather than
-// the repository's ./data/ directory, which is only a scratch/working directory for the running
-// agent, not a place for checked-in test fixtures.
+// rawDataPath and sqliteFixturePath point at the test fixtures for this suite, kept under
+// testdata/ (a Go-conventional directory name that the toolchain never treats as a package)
+// rather than the repository's ./data/ directory, which is only a scratch/working directory for
+// the running agent, not a place for checked-in test fixtures. sqliteFixturePath is a real,
+// minimal Cashew SQLite export (not a CSV/SQL script), so it is copied as-is rather than seeded
+// row by row.
 const (
-	rawDataPath = "testdata/test-raw-data.json"
-	csvDataPath = "testdata/test-transaction-data.csv"
+	rawDataPath       = "testdata/test-raw-data.json"
+	sqliteFixturePath = "testdata/test-transaction-data.sql"
 )
 
-// realWalletFK/realCategoryFK are taken directly from testdata/test-transaction-data.csv: they
-// are the actual wallet and category the pre-existing "Maxi" transactions use, so seeded memory
-// mappings resolve to values that also make sense against the SQLite fixture built from that CSV.
+// realWalletFK/realCategoryFK/realDrinksCategoryFK are taken directly from
+// testdata/test-transaction-data.sql: they are the actual wallet/category the pre-existing
+// "Maxi"/"Lidl"/"Drinks"/"Sank" transactions use, matching testdata/answers.json exactly.
 // testAccount is the bank_account value shared by every entry in testdata/test-raw-data.json.
 const (
-	realWalletFK   = "7f9456f5-0e24-4eae-b9bd-2b031d667a1d"
-	realCategoryFK = "2"
-	testAccount    = "1391"
+	realWalletFK       = "6986664f-0ce4-4bfd-938b-db76cec82754"
+	realCategoryFK     = "2"
+	realSankCategoryFK = "1"
+	testAccount        = "1391"
 )
 
 // defaultTestMemoryDBName is a dedicated Postgres database, separate from the memory.dbname
@@ -75,7 +75,7 @@ const defaultTestMemoryDBName = "expense_agent_test"
 
 // testDSN builds the Postgres DSN for this suite: connection details (host, port, user,
 // password, sslmode) come from the standard config file (see config.example.yaml, overridable
-// via BUDGET_BOT_TEST_CONFIG) so no credentials are ever hardcoded here, but the database name
+// via BUDGET_BOT_TEST_CONFIG), so no credentials are ever hardcoded here, but the database name
 // is always overridden to a dedicated test database (see defaultTestMemoryDBName) rather than
 // the configured production one.
 func testDSN() string {
@@ -106,7 +106,7 @@ func loadRawExpenses() []llmparser.Expense {
 }
 
 // findExpense returns the raw expense whose description exactly matches desc, failing the test
-// if data/test-raw-data.json no longer contains it.
+// if testdata/test-raw-data.json no longer contains it.
 func findExpense(expenses []llmparser.Expense, desc string) llmparser.Expense {
 	for _, e := range expenses {
 		if e.Description == desc {
@@ -117,115 +117,33 @@ func findExpense(expenses []llmparser.Expense, desc string) llmparser.Expense {
 	return llmparser.Expense{}
 }
 
-// sqliteSchema mirrors internal/store/store_test.go's testSchema: the minimal Cashew-shaped
-// schema internal/store.Store requires (see internal/store/store.go's requiredTables).
-const sqliteSchema = `
-CREATE TABLE wallets ("wallet_pk" TEXT NOT NULL, "name" TEXT NOT NULL, PRIMARY KEY ("wallet_pk"));
-CREATE TABLE categories ("category_pk" TEXT NOT NULL, "name" TEXT NOT NULL, PRIMARY KEY ("category_pk"));
-CREATE TABLE transactions (
-	"transaction_pk" TEXT NOT NULL,
-	"name" TEXT NOT NULL,
-	"amount" REAL NOT NULL,
-	"note" TEXT NOT NULL,
-	"category_fk" TEXT NOT NULL,
-	"sub_category_fk" TEXT NULL,
-	"wallet_fk" TEXT NOT NULL,
-	"date_created" INTEGER NOT NULL,
-	"date_time_modified" INTEGER NULL,
-	"original_date_due" INTEGER NULL,
-	"income" INTEGER NOT NULL DEFAULT 0,
-	"paid" INTEGER NOT NULL DEFAULT 0,
-	"skip_paid" INTEGER NOT NULL DEFAULT 0,
-	PRIMARY KEY ("transaction_pk")
-);
-`
-
-// csv column indexes into a testdata/test-transaction-data.csv row, following the column order
-// of the Cashew "transactions" table as documented in AGENTS.md.
-const (
-	csvColTransactionPK = 0
-	csvColName          = 2
-	csvColAmount        = 3
-	csvColNote          = 4
-	csvColCategoryFK    = 5
-	csvColSubCategoryFK = 6
-	csvColWalletFK      = 7
-	csvColDateCreated   = 8
-	csvColIncome        = 11
-)
-
 // scratchDataDir is the repository's ./data directory: a gitignored scratch area for temporary
-// runtime files (the running agent's SQLite files, screenshots, etc). Any temporary file this
-// suite creates (the seeded SQLite fixture) belongs there too, not under os.TempDir().
+// runtime files (the running agent's SQLite files, screenshots, etc.). Any temporary file this
+// suite creates (the copied SQLite fixture) belongs there too, not under os.TempDir().
 const scratchDataDir = "../../../data"
 
-// newSQLiteFixture builds a temporary Cashew-shaped SQLite database file, seeded from
-// testdata/test-transaction-data.csv, and returns an opened *store.Store plus the number of
-// rows seeded (for sanity-checking the fixture).
-func newSQLiteFixture() (*store.Store, int) {
+// newSQLiteFixture copies testdata/test-transaction-data.sql (a real, minimal Cashew export)
+// into a temporary file under scratchDataDir and opens it, so every test starts from an
+// identical, untouched copy of the fixture regardless of run order.
+func newSQLiteFixture() *store.Store {
 	dir, err := os.MkdirTemp(scratchDataDir, "enrichment-integration-*")
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(func() { _ = os.RemoveAll(dir) })
 	path := filepath.Join(dir, "cashew.sqlite")
 
-	raw, err := sql.Open("sqlite", path)
-	Expect(err).NotTo(HaveOccurred())
-	_, err = raw.Exec(sqliteSchema)
-	Expect(err).NotTo(HaveOccurred())
+	src, err := os.Open(sqliteFixturePath)
+	Expect(err).NotTo(HaveOccurred(), "open %s", sqliteFixturePath)
+	defer src.Close()
 
-	n := seedFromCSV(raw)
-	Expect(raw.Close()).To(Succeed())
+	dst, err := os.Create(path)
+	Expect(err).NotTo(HaveOccurred())
+	_, err = io.Copy(dst, src)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(dst.Close()).To(Succeed())
 
 	s, err := store.Open(path)
-	Expect(err).NotTo(HaveOccurred(), "open seeded sqlite fixture")
-	return s, n
-}
-
-// seedFromCSV parses csvDataPath (using encoding/csv, since several rows contain quoted,
-// multi-line note fields) and inserts every row into the transactions table, returning the
-// number of rows inserted.
-func seedFromCSV(db *sql.DB) int {
-	f, err := os.Open(csvDataPath)
-	Expect(err).NotTo(HaveOccurred(), "open %s", csvDataPath)
-	defer f.Close()
-
-	r := csv.NewReader(f)
-	r.FieldsPerRecord = -1
-
-	n := 0
-	for {
-		record, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		Expect(err).NotTo(HaveOccurred(), "parse %s", csvDataPath)
-
-		amount, err := strconv.ParseFloat(record[csvColAmount], 64)
-		Expect(err).NotTo(HaveOccurred(), "parse amount in row %v", record)
-		dateCreated, err := strconv.ParseInt(record[csvColDateCreated], 10, 64)
-		Expect(err).NotTo(HaveOccurred(), "parse date_created in row %v", record)
-
-		var subCategory sql.NullString
-		if record[csvColSubCategoryFK] != "" {
-			subCategory = sql.NullString{String: record[csvColSubCategoryFK], Valid: true}
-		}
-		var income int
-		if record[csvColIncome] == "1" {
-			income = 1
-		}
-
-		_, err = db.Exec(`
-			INSERT INTO transactions (
-				transaction_pk, name, amount, note, category_fk, sub_category_fk, wallet_fk,
-				date_created, income, paid, skip_paid
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)`,
-			record[csvColTransactionPK], record[csvColName], amount, record[csvColNote],
-			record[csvColCategoryFK], subCategory, record[csvColWalletFK], dateCreated, income,
-		)
-		Expect(err).NotTo(HaveOccurred(), "insert row %v", record)
-		n++
-	}
-	return n
+	Expect(err).NotTo(HaveOccurred(), "open copied sqlite fixture")
+	return s
 }
 
 // newRealMemoryStore connects to the dedicated test Postgres database (see testDSN), migrates
@@ -246,14 +164,21 @@ func newRealMemoryStore(ctx context.Context) *memory.Store {
 	return mem
 }
 
-// truncateMemoryTables wipes the memory tables so each test starts from a clean slate. It uses
-// its own pgxpool connection because *memory.Store does not expose its underlying pool.
-func truncateMemoryTables(ctx context.Context) {
+// newRawPool opens a plain pgxpool.Pool to the dedicated test Postgres database, for tests that
+// need to run raw SQL against transaction_mappings (e.g. to simulate a mapping learned in an
+// earlier session) rather than going through *memory.Store's public API.
+func newRawPool(ctx context.Context) *pgxpool.Pool {
 	pool, err := pgxpool.New(ctx, testDSN())
 	Expect(err).NotTo(HaveOccurred())
+	return pool
+}
+
+// truncateMemoryTables wipes the memory tables so each test starts from a clean slate.
+func truncateMemoryTables(ctx context.Context) {
+	pool := newRawPool(ctx)
 	defer pool.Close()
 
-	_, err = pool.Exec(ctx, "TRUNCATE transaction_mappings, wallet_mappings")
+	_, err := pool.Exec(ctx, "TRUNCATE transaction_mappings, wallet_mappings")
 	Expect(err).NotTo(HaveOccurred())
 }
 
@@ -300,11 +225,10 @@ func (unreachableResolver) ResolveTopic(context.Context, llmparser.Expense, []ll
 
 var _ = Describe("Enricher.Enrich against real memory + SQLite backends", func() {
 	var (
-		ctx     context.Context
-		mem     *memory.Store
-		db      *store.Store
-		raw     []llmparser.Expense
-		numRows int
+		ctx context.Context
+		mem *memory.Store
+		db  *store.Store
+		raw []llmparser.Expense
 	)
 
 	BeforeEach(func() {
@@ -314,15 +238,14 @@ var _ = Describe("Enricher.Enrich against real memory + SQLite backends", func()
 
 		mem = newRealMemoryStore(ctx)
 
-		db, numRows = newSQLiteFixture()
+		db = newSQLiteFixture()
 		DeferCleanup(db.Close)
-		Expect(numRows).To(BeNumerically(">", 0), "sqlite fixture must be seeded from the CSV")
 
 		raw = loadRawExpenses()
 
-		// The wallet mapping is shared by all three cases below: the raw data always uses the
-		// same bank_account ("1391"), and wallet resolution happens before any memory/LLM lookup
-		// for the description, so every case needs it resolved to reach that lookup at all.
+		// The wallet mapping is shared by every case below: the raw data always uses the same
+		// bank_account ("1391"), and wallet resolution happens before any memory/LLM lookup for
+		// the description, so every case needs it resolved to reach that lookup at all.
 		Expect(mem.SaveWalletMapping(ctx, memory.WalletMappings{
 			AccountPattern: testAccount,
 			Currency:       "RSD",
@@ -333,12 +256,13 @@ var _ = Describe("Enricher.Enrich against real memory + SQLite backends", func()
 	})
 
 	It("exact match: resolves directly from an exact memory pattern, without calling the LLM", func() {
-		exp := findExpense(raw, "213 - MAXI 779")
+		exp := findExpense(raw, "KAFETERIJA SANK")
 
 		Expect(mem.SaveTransactionMapping(ctx, memory.TransactionMappings{
 			TransactionPattern: exp.Description,
-			Name:               ptr("Maxi"),
-			CategoryFK:         ptr(realCategoryFK),
+			Name:               ptr("Sank"),
+			CategoryFK:         ptr(realSankCategoryFK),
+			SubCategoryFK:      ptr("2b2c6cc2-6504-4360-bab5-ecbbd7889263"),
 			Income:             int64Ptr(0),
 		})).To(Succeed())
 
@@ -349,47 +273,83 @@ var _ = Describe("Enricher.Enrich against real memory + SQLite backends", func()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.NeedsUserInput).To(BeFalse())
 		Expect(result.Expense).NotTo(BeNil())
-		Expect(result.Expense.Name).To(Equal("Maxi"))
-		Expect(result.Expense.CategoryFK).To(Equal(realCategoryFK))
-		Expect(result.Expense.WalletFK).To(Equal(realWalletFK))
-		Expect(result.Expense.Amount).To(Equal(exp.Amount))
+		Expect(result.Expense.Name).To(HaveValue(Equal("Sank")))
+		Expect(result.Expense.CategoryFK).To(HaveValue(Equal(realSankCategoryFK)))
+		Expect(result.Expense.WalletFK).To(HaveValue(Equal(realWalletFK)))
+		Expect(result.Expense.Amount).To(Equal(-exp.Amount))
+		// The no-source fields (see AGENTS.md's field resolution rule) must be copied from the
+		// most similar existing "Sank" transaction in testdata/test-transaction-data.sql, not
+		// invented, since they have no source in the raw SMS data.
+		Expect(result.Expense.PeriodLength).To(HaveValue(BeNumerically("==", 1)))
+		Expect(result.Expense.Reoccurrence).To(HaveValue(BeNumerically("==", 3)))
 	})
 
-	It("partial match: a similar-but-not-identical memory pattern is confirmed by the real LLM", func() {
-		exp := findExpense(raw, "214 - MAXI 179")
-
-		// Seeded with a different (but similar) description, so FindBestMatch's trigram score
-		// stays below the high-confidence threshold and the Enricher must fall back to the LLM
-		// with this as one of the top-N fuzzy candidates.
+	It("llm found match: a similar-but-not-identical memory pattern is confirmed by the real LLM", func() {
+		// Seeded with slightly different (but similar) descriptions, so FindBestMatch's trigram
+		// score stays below the high-confidence threshold for each raw expense below, and the
+		// Enricher must fall back to the LLM with these as top-N fuzzy candidates.
 		Expect(mem.SaveTransactionMapping(ctx, memory.TransactionMappings{
-			TransactionPattern: "213 - MAXI 779",
-			Name:               ptr("Maxi"),
-			CategoryFK:         ptr(realCategoryFK),
-			Income:             int64Ptr(0),
+			TransactionPattern: "213 - MAXI 100", Name: ptr("Maxi"), CategoryFK: ptr(realCategoryFK), Income: int64Ptr(0),
 		})).To(Succeed())
-
-		best, ok, err := mem.FindBestMatch(ctx, exp.Description)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(ok).To(BeTrue())
-		Expect(best.Score).To(BeNumerically("<", memory.HighConfidenceThreshold), "fixture must exercise the partial-match path, not the exact one")
+		Expect(mem.SaveTransactionMapping(ctx, memory.TransactionMappings{
+			TransactionPattern: "LIDL OLD", Name: ptr("Lidl"), CategoryFK: ptr(realCategoryFK), Income: int64Ptr(0),
+		})).To(Succeed())
 
 		resolver := newRealLLMResolver(ctx)
 		enr := handler.NewEnricher(mem, resolver, 5, memory.HighConfidenceThreshold)
 
+		for _, desc := range []string{"213 - MAXI 779", "LIDL NEW", "214 - MAXI 179"} {
+			exp := findExpense(raw, desc)
+
+			result, err := enr.Enrich(ctx, exp, dbLookup{db})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.NeedsUserInput).To(BeFalse(), "the LLM must recognize %q as a known merchant", desc)
+			Expect(result.Expense).NotTo(BeNil())
+			Expect(result.Expense.CategoryFK).To(HaveValue(Equal(realCategoryFK)))
+			Expect(result.Expense.WalletFK).To(HaveValue(Equal(realWalletFK)))
+		}
+	})
+
+	It("match found in memory: info learned in an earlier session (inserted directly via SQL) resolves the expense without calling the LLM", func() {
+		exp := findExpense(raw, "SHOP NB 319")
+
+		// Simulate a mapping learned in an earlier agent session by inserting it directly via
+		// SQL (bypassing SaveTransactionMapping), sourced from the "Drinks" transaction
+		// (27d54ad1-9137-4cae-ae82-ddb9b10c61ff, see testdata/answers.json's match_found_memory
+		// case) in testdata/test-transaction-data.sql. The row is deleted again afterward so it
+		// never leaks into another test.
+		pool := newRawPool(ctx)
+		defer pool.Close()
+		_, err := pool.Exec(ctx, `
+			INSERT INTO transaction_mappings (
+				transaction_pattern, name, category_fk, income, period_length, reoccurrence,
+				upcoming_transaction_notification, paid, created_another_future_transaction, skip_paid
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			exp.Description, "Drinks", realCategoryFK, 0, 1, 3, 1, 1, 0, 1)
+		Expect(err).NotTo(HaveOccurred())
+		defer func() {
+			_, err := pool.Exec(ctx, `DELETE FROM transaction_mappings WHERE transaction_pattern = $1`, exp.Description)
+			Expect(err).NotTo(HaveOccurred())
+		}()
+
+		enr := handler.NewEnricher(mem, unreachableResolver{}, 5, memory.HighConfidenceThreshold)
+
 		result, err := enr.Enrich(ctx, exp, dbLookup{db})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.NeedsUserInput).To(BeFalse(), "the LLM must recognize %q as the same merchant as %q", exp.Description, "213 - MAXI 779")
+		Expect(result.NeedsUserInput).To(BeFalse())
 		Expect(result.Expense).NotTo(BeNil())
-		Expect(result.Expense.CategoryFK).To(Equal(realCategoryFK))
-		Expect(result.Expense.WalletFK).To(Equal(realWalletFK))
+		Expect(result.Expense.Name).To(HaveValue(Equal("Drinks")))
+		Expect(result.Expense.CategoryFK).To(HaveValue(Equal(realCategoryFK)))
+		Expect(result.Expense.WalletFK).To(HaveValue(Equal(realWalletFK)))
 	})
 
-	It("no match: the agent asks the user when nothing in memory or the SQLite file matches", func() {
-		exp := findExpense(raw, "KAFETERIJA SANK")
+	It("requested from user: the agent asks the user when nothing in memory or the SQLite file matches", func() {
+		exp := findExpense(raw, "APOTEKA 139>BEO")
 
 		// Deliberately left empty: memory has no transaction mappings at all, and the SQLite
-		// fixture's "note" column is always empty so no name/note lookup can match either.
+		// fixture's "note" column is always empty, so no name/note lookup can match either.
 		resolver := newRealLLMResolver(ctx)
 		enr := handler.NewEnricher(mem, resolver, 5, memory.HighConfidenceThreshold)
 
@@ -420,6 +380,30 @@ func (d dbLookup) FindCandidates(ctx context.Context, description string, limit 
 		})
 	}
 	return out, nil
+}
+
+func (d dbLookup) FindSimilar(ctx context.Context, description string) (handler.DBSimilarFields, bool, error) {
+	similar, ok, err := d.s.FindSimilarTransaction(ctx, description)
+	if err != nil {
+		return handler.DBSimilarFields{}, false, err
+	}
+	if !ok {
+		return handler.DBSimilarFields{}, false, nil
+	}
+	return handler.DBSimilarFields{
+		OriginalDateDue:                 similar.OriginalDateDue,
+		PairedTransactionFK:             similar.PairedTransactionFK,
+		PeriodLength:                    similar.PeriodLength,
+		Reoccurrence:                    similar.Reoccurrence,
+		EndDate:                         similar.EndDate,
+		UpcomingTransactionNotification: similar.UpcomingTransactionNotification,
+		Type:                            similar.Type,
+		Paid:                            similar.Paid,
+		CreatedAnotherFutureTransaction: similar.CreatedAnotherFutureTransaction,
+		SkipPaid:                        similar.SkipPaid,
+		ObjectiveFK:                     similar.ObjectiveFK,
+		ObjectiveLoanFK:                 similar.ObjectiveLoanFK,
+	}, true, nil
 }
 
 func ptr(s string) *string    { return &s }
