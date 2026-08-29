@@ -342,11 +342,11 @@ func (b *Bot) applyEdit(chatID int64, state *pendingState, command string) {
 	entry := state.batch[index-1]
 	switch field {
 	case "category":
-		entry.CategoryFK = value
+		entry.CategoryFK = &value
 	case "wallet":
-		entry.WalletFK = value
+		entry.WalletFK = &value
 	case "name":
-		entry.Name = value
+		entry.Name = &value
 	default:
 		b.reply(chatID, "Unknown field. Use \"category\", \"wallet\", or \"name\".")
 		return
@@ -487,17 +487,25 @@ func isWalletQuestion(question string) bool {
 
 func formatEnrichedExpense(e *handler.EnrichedExpense) string {
 	kind := "Expense"
-	if e.Income {
+	if e.Income != nil && *e.Income != 0 {
 		kind = "Income"
 	}
-	sub := e.SubCategoryFK
-	if sub == "" {
-		sub = "-"
+	sub := "-"
+	if e.SubCategoryFK != nil && *e.SubCategoryFK != "" {
+		sub = *e.SubCategoryFK
 	}
 	return fmt.Sprintf(
-		"%s: %s\nAmount: %.2f\nCategory: %s\nSubcategory: %s\nWallet: %s\nNote: %s\nDate: %s",
-		kind, e.Name, e.Amount, e.CategoryFK, sub, e.WalletFK, e.RawDescription, e.Date,
+		"%s: %s\nAmount: %.2f\nCategory: %s\nSubcategory: %s\nWallet: %s\nNote: %s\nDate: %d",
+		kind, strOrDash(e.Name), e.Amount, strOrDash(e.CategoryFK), sub, strOrDash(e.WalletFK), strOrDash(e.Note), e.DateCreated,
 	)
+}
+
+// strOrDash dereferences a possibly-nil string pointer, returning "-" when nil or empty.
+func strOrDash(s *string) string {
+	if s == nil || *s == "" {
+		return "-"
+	}
+	return *s
 }
 
 // formatBatch renders every expense in a batch as a numbered list, so the user can refer to an

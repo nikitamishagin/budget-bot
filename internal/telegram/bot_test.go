@@ -80,6 +80,10 @@ func (f *fakeWriter) FindCandidates(_ context.Context, _ string, _ int) ([]handl
 	return nil, nil
 }
 
+func (f *fakeWriter) FindSimilar(_ context.Context, _ string) (handler.DBSimilarFields, bool, error) {
+	return handler.DBSimilarFields{}, false, nil
+}
+
 func (f *fakeWriter) Insert(_ context.Context, exp handler.EnrichedExpense) (store.InsertResult, error) {
 	f.inserted = append(f.inserted, exp)
 	return store.InsertResult{TransactionPK: "fake-pk"}, nil
@@ -112,8 +116,22 @@ func (f *fakeEnricher) Enrich(_ context.Context, _ llmparser.Expense, _ ...handl
 func (f *fakeEnricher) ResolveWithUserInput(_ context.Context, _ llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool) (*handler.EnrichedExpense, error) {
 	f.resolveCalls++
 	f.resolveArgs = []string{name, categoryFK, subCategoryFK, walletFK}
-	return &handler.EnrichedExpense{Name: name, CategoryFK: categoryFK, WalletFK: walletFK, Income: income}, nil
+	return &handler.EnrichedExpense{Name: &name, CategoryFK: &categoryFK, WalletFK: &walletFK, Income: boolToInt64Ptr(income)}, nil
 }
+
+// boolToInt64Ptr returns a pointer to the int64 representation of b (1 for true, 0 for false),
+// used to fill the nullable Income field of handler.EnrichedExpense in tests.
+func boolToInt64Ptr(b bool) *int64 {
+	var v int64
+	if b {
+		v = 1
+	}
+	return &v
+}
+
+// strP builds the pointer values handler.EnrichedExpense's fields need, keeping test literals
+// concise.
+func strP(s string) *string { return &s }
 
 // fakeAccounts is an in-memory AccountResolver for tests.
 type fakeAccounts struct {
@@ -189,7 +207,7 @@ var _ = Describe("Bot.HandlePhoto and Bot.HandleParse", func() {
 
 	It("asks for approval once every queued screenshot is parsed and enriched", func() {
 		sender := &fakeSender{}
-		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks", Amount: 9.5, CategoryFK: "cat-food", WalletFK: "wallet-main"}}}
+		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: strP("Starbucks"), Amount: 9.5, CategoryFK: strP("cat-food"), WalletFK: strP("wallet-main")}}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks", Amount: 9.5}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("fake-image"), "image/jpeg")
@@ -252,7 +270,7 @@ var _ = Describe("Bot.HandleText", func() {
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
 		bot.HandleParse(context.Background(), 1)
 
-		enricher.result = handler.Result{Expense: &handler.EnrichedExpense{Name: "Unknown Shop", CategoryFK: "cat-x", WalletFK: "wallet-main"}}
+		enricher.result = handler.Result{Expense: &handler.EnrichedExpense{Name: strP("Unknown Shop"), CategoryFK: strP("cat-x"), WalletFK: strP("wallet-main")}}
 		bot.HandleText(context.Background(), 1, "wallet-main")
 
 		Expect(accounts.wallets["1234|"].WalletFK).To(Equal("wallet-main"))
@@ -287,7 +305,7 @@ var _ = Describe("Bot.HandleText", func() {
 
 	It("sends the database file back once the user approves", func() {
 		sender := &fakeSender{}
-		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks"}}}
+		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: strP("Starbucks")}}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
@@ -300,7 +318,7 @@ var _ = Describe("Bot.HandleText", func() {
 
 	It("discards the expense once the user declines", func() {
 		sender := &fakeSender{}
-		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks"}}}
+		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: strP("Starbucks")}}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
@@ -313,7 +331,7 @@ var _ = Describe("Bot.HandleText", func() {
 
 	It("re-asks when the approval answer is not yes/no", func() {
 		sender := &fakeSender{}
-		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks"}}}
+		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: strP("Starbucks")}}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
@@ -327,7 +345,7 @@ var _ = Describe("Bot.HandleText", func() {
 	It("allows editing a rejected batch and approving it afterwards", func() {
 		sender := &fakeSender{}
 		writer := newFakeWriter()
-		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks", CategoryFK: "cat-wrong", WalletFK: "wallet-1"}}}
+		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: strP("Starbucks"), CategoryFK: strP("cat-wrong"), WalletFK: strP("wallet-1")}}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.OpenDatabase = func(string) (ExpenseWriter, error) { return writer, nil }
@@ -341,13 +359,13 @@ var _ = Describe("Bot.HandleText", func() {
 		bot.HandleText(context.Background(), 1, "approve")
 
 		Expect(writer.inserted).To(HaveLen(1))
-		Expect(writer.inserted[0].CategoryFK).To(Equal("cat-coffee"))
+		Expect(writer.inserted[0].CategoryFK).To(HaveValue(Equal("cat-coffee")))
 		Expect(sender.sentDocs).To(Equal(1))
 	})
 
 	It("discards a rejected batch entirely on request", func() {
 		sender := &fakeSender{}
-		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks"}}}
+		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: strP("Starbucks")}}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
@@ -375,7 +393,7 @@ var _ = Describe("Bot.HandleDocument", func() {
 
 	It("unlocks screenshot processing once a database file is saved", func() {
 		sender := &fakeSender{}
-		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks"}}}
+		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: strP("Starbucks")}}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		dir, err := os.MkdirTemp("", "telegram-test-*")
 		Expect(err).NotTo(HaveOccurred())
@@ -408,7 +426,7 @@ var _ = Describe("Bot approval saving", func() {
 	It("inserts the enriched expense into the chat's database before returning it", func() {
 		sender := &fakeSender{}
 		writer := newFakeWriter()
-		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: "Starbucks", Amount: 5.5, CategoryFK: "cat-coffee", WalletFK: "wallet-1"}}}
+		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: strP("Starbucks"), Amount: 5.5, CategoryFK: strP("cat-coffee"), WalletFK: strP("wallet-1")}}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.OpenDatabase = func(string) (ExpenseWriter, error) { return writer, nil }
@@ -418,7 +436,7 @@ var _ = Describe("Bot approval saving", func() {
 		bot.HandleText(context.Background(), 1, "yes")
 
 		Expect(writer.inserted).To(HaveLen(1))
-		Expect(writer.inserted[0].Name).To(Equal("Starbucks"))
+		Expect(writer.inserted[0].Name).To(HaveValue(Equal("Starbucks")))
 		Expect(sender.sentDocs).To(Equal(1))
 	})
 })

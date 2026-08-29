@@ -26,19 +26,10 @@ type InsertResult struct {
 
 // Insert adds exp as a new row in the "transactions" table. Before inserting, it checks whether a
 // transaction with the same wallet, amount, name and date (same calendar day) already exists; if
-// so, it reports the duplicate and inserts nothing.
+// so, it reports the duplicate and inserts nothing. exp is expected to already carry its final,
+// enrichment-computed values (signed amount, date_created/date_time_modified as Unix seconds,
+// etc.) - see internal/handler.Enricher, which builds it.
 func (s *Store) Insert(ctx context.Context, exp handler.EnrichedExpense) (InsertResult, error) {
-	// Cashew stores all timestamp columns as Unix seconds (not milliseconds) - verified against a
-	// real exported Cashew database, whose date_created values are 10-digit second-epoch
-	// timestamps.
-	dateSeconds := parseExpenseDate(exp.Date)
-
-	// signedAmount stores the amount as Cashew does: negative for expenses, positive for income.
-	signedAmount := exp.Amount
-	if !exp.Income {
-		signedAmount = -signedAmount
-	}
-
 	// Log the JSON data of the expense being inserted, so a failed/duplicate/successful write can
 	// always be traced back to what was attempted.
 	if expJSON, err := json.Marshal(exp); err == nil {
@@ -47,7 +38,7 @@ func (s *Store) Insert(ctx context.Context, exp handler.EnrichedExpense) (Insert
 		log.Info().Interface("expense", exp).Msg("inserting expense into database")
 	}
 
-	if pk, ok, err := s.findDuplicate(ctx, exp, signedAmount, dateSeconds); err != nil {
+	if pk, ok, err := s.findDuplicate(ctx, exp); err != nil {
 		return InsertResult{}, err
 	} else if ok {
 		log.Info().Str("transaction_pk", pk).Msg("duplicate expense detected, skipping insert")
@@ -55,23 +46,19 @@ func (s *Store) Insert(ctx context.Context, exp handler.EnrichedExpense) (Insert
 	}
 
 	pk := uuid.NewString()
-	now := time.Now().Unix()
 
-	var subCategory sql.NullString
-	if exp.SubCategoryFK != "" {
-		subCategory = sql.NullString{String: exp.SubCategoryFK, Valid: true}
-	}
-
-	// note stores the raw SMS description (exp.RawTopic): it must be kept in the database as the
-	// transaction's note, both for user reference and so future lookups
-	// (FindExactMatch/FindCandidates) can match on it.
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO transactions (
-			transaction_pk, name, amount, note, category_fk, sub_category_fk, wallet_fk,
-			date_created, date_time_modified, original_date_due, income, paid, skip_paid
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)`,
-		pk, exp.Name, signedAmount, exp.RawDescription, exp.CategoryFK, subCategory, exp.WalletFK,
-		dateSeconds, now, dateSeconds, boolToInt(exp.Income),
+			transaction_pk, paired_transaction_fk, name, amount, note, category_fk, sub_category_fk,
+			wallet_fk, date_created, date_time_modified, original_date_due, income, period_length,
+			reoccurrence, end_date, upcoming_transaction_notification, type, paid,
+			created_another_future_transaction, skip_paid, objective_fk, objective_loan_fk
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		pk, exp.PairedTransactionFK, strVal(exp.Name), exp.Amount, strVal(exp.Note), strVal(exp.CategoryFK),
+		nullString(exp.SubCategoryFK), strVal(exp.WalletFK), exp.DateCreated, exp.DateTimeModified,
+		exp.OriginalDateDue, int64Val(exp.Income), exp.PeriodLength, exp.Reoccurrence, exp.EndDate,
+		exp.UpcomingTransactionNotification, exp.Type, int64Val(exp.Paid), exp.CreatedAnotherFutureTransaction,
+		int64Val(exp.SkipPaid), exp.ObjectiveFK, exp.ObjectiveLoanFK,
 	)
 	if err != nil {
 		log.Error().Err(err).Str("transaction_pk", pk).Msg("failed to insert expense")
@@ -84,14 +71,14 @@ func (s *Store) Insert(ctx context.Context, exp handler.EnrichedExpense) (Insert
 
 // findDuplicate looks for an existing transaction with the same wallet, amount, name (case-insensitive)
 // and date (same calendar day) as exp.
-func (s *Store) findDuplicate(ctx context.Context, exp handler.EnrichedExpense, signedAmount float64, dateSeconds int64) (string, bool, error) {
-	dayStart, dayEnd := dayBounds(dateSeconds)
+func (s *Store) findDuplicate(ctx context.Context, exp handler.EnrichedExpense) (string, bool, error) {
+	dayStart, dayEnd := dayBounds(exp.DateCreated)
 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT transaction_pk FROM transactions
 		WHERE wallet_fk = ? AND amount = ? AND name = ? COLLATE NOCASE
 		  AND date_created >= ? AND date_created < ?
-		LIMIT 1`, exp.WalletFK, signedAmount, exp.Name, dayStart, dayEnd)
+		LIMIT 1`, strVal(exp.WalletFK), exp.Amount, strVal(exp.Name), dayStart, dayEnd)
 
 	var pk string
 	if err := row.Scan(&pk); err != nil {
@@ -111,19 +98,27 @@ func dayBounds(seconds int64) (start, end int64) {
 	return dayStart.Unix(), dayStart.AddDate(0, 0, 1).Unix()
 }
 
-// parseExpenseDate parses a llmparser.Expense.Date (RFC3339 "if determinable, otherwise
-// as-is") into a second epoch timestamp (Cashew's convention), falling back to now when it
-// cannot be parsed.
-func parseExpenseDate(date string) int64 {
-	if t, err := time.Parse(time.RFC3339, date); err == nil {
-		return t.Unix()
+// strVal dereferences a possibly-nil string pointer, returning "" when nil.
+func strVal(s *string) string {
+	if s == nil {
+		return ""
 	}
-	return time.Now().Unix()
+	return *s
 }
 
-func boolToInt(b bool) int {
-	if b {
-		return 1
+// int64Val dereferences a possibly-nil int64 pointer, returning 0 when nil.
+func int64Val(v *int64) int64 {
+	if v == nil {
+		return 0
 	}
-	return 0
+	return *v
+}
+
+// nullString converts a possibly-nil string pointer into a sql.NullString, so an unset
+// sub_category_fk is stored as SQL NULL rather than an empty string.
+func nullString(s *string) sql.NullString {
+	if s == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *s, Valid: true}
 }

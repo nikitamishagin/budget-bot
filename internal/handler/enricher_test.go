@@ -139,9 +139,9 @@ var _ = Describe("Enricher.Enrich", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.NeedsUserInput).To(BeFalse())
 		Expect(result.Expense).NotTo(BeNil())
-		Expect(result.Expense.CategoryFK).To(Equal("cat-food"))
-		Expect(result.Expense.WalletFK).To(Equal("wallet-main"))
-		Expect(result.Expense.Amount).To(Equal(9.5))
+		Expect(result.Expense.CategoryFK).To(HaveValue(Equal("cat-food")))
+		Expect(result.Expense.WalletFK).To(HaveValue(Equal("wallet-main")))
+		Expect(result.Expense.Amount).To(Equal(-9.5))
 		Expect(res.calls).To(Equal(0))
 	})
 
@@ -159,7 +159,7 @@ var _ = Describe("Enricher.Enrich", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(res.calls).To(Equal(1))
 		Expect(result.NeedsUserInput).To(BeFalse())
-		Expect(result.Expense.CategoryFK).To(Equal("cat-food"))
+		Expect(result.Expense.CategoryFK).To(HaveValue(Equal("cat-food")))
 		Expect(mem.saveCalls).To(Equal(1)) // saved once after LLM resolution (seed mapping was injected directly)
 	})
 
@@ -172,8 +172,8 @@ var _ = Describe("Enricher.Enrich", func() {
 		result, err := enr.Enrich(ctx, exp)
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.Expense.CategoryFK).To(Equal("cat-food"))
-		Expect(result.Expense.SubCategoryFK).To(Equal("sub-coffee"))
+		Expect(result.Expense.CategoryFK).To(HaveValue(Equal("cat-food")))
+		Expect(result.Expense.SubCategoryFK).To(HaveValue(Equal("sub-coffee")))
 	})
 
 	It("asks the user when the LLM cannot confidently resolve the description", func() {
@@ -202,8 +202,8 @@ var _ = Describe("Enricher.ResolveWithUserInput", func() {
 		enriched, err := enr.ResolveWithUserInput(ctx, exp, "New Shop", "cat-new", "", "wallet-savings", false)
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(enriched.CategoryFK).To(Equal("cat-new"))
-		Expect(enriched.WalletFK).To(Equal("wallet-savings"))
+		Expect(enriched.CategoryFK).To(HaveValue(Equal("cat-new")))
+		Expect(enriched.WalletFK).To(HaveValue(Equal("wallet-savings")))
 		Expect(mem.saveCalls).To(Equal(1))
 		Expect(mem.saveAccounts).To(Equal(1))
 

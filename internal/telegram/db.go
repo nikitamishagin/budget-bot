@@ -43,6 +43,30 @@ func (a *storeAdapter) FindCandidates(ctx context.Context, topic string, limit i
 	return out, nil
 }
 
+func (a *storeAdapter) FindSimilar(ctx context.Context, description string) (handler.DBSimilarFields, bool, error) {
+	similar, ok, err := a.store.FindSimilarTransaction(ctx, description)
+	if err != nil {
+		return handler.DBSimilarFields{}, false, fmt.Errorf("find similar transaction: %w", err)
+	}
+	if !ok {
+		return handler.DBSimilarFields{}, false, nil
+	}
+	return handler.DBSimilarFields{
+		OriginalDateDue:                 similar.OriginalDateDue,
+		PairedTransactionFK:             similar.PairedTransactionFK,
+		PeriodLength:                    similar.PeriodLength,
+		Reoccurrence:                    similar.Reoccurrence,
+		EndDate:                         similar.EndDate,
+		UpcomingTransactionNotification: similar.UpcomingTransactionNotification,
+		Type:                            similar.Type,
+		Paid:                            similar.Paid,
+		CreatedAnotherFutureTransaction: similar.CreatedAnotherFutureTransaction,
+		SkipPaid:                        similar.SkipPaid,
+		ObjectiveFK:                     similar.ObjectiveFK,
+		ObjectiveLoanFK:                 similar.ObjectiveLoanFK,
+	}, true, nil
+}
+
 func (a *storeAdapter) Insert(ctx context.Context, exp handler.EnrichedExpense) (store.InsertResult, error) {
 	return a.store.Insert(ctx, exp)
 }

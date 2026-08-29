@@ -26,6 +26,7 @@ CREATE TABLE wallets ("wallet_pk" TEXT NOT NULL, "name" TEXT NOT NULL, PRIMARY K
 CREATE TABLE categories ("category_pk" TEXT NOT NULL, "name" TEXT NOT NULL, PRIMARY KEY ("category_pk"));
 CREATE TABLE transactions (
 	"transaction_pk" TEXT NOT NULL,
+	"paired_transaction_fk" TEXT NULL,
 	"name" TEXT NOT NULL,
 	"amount" REAL NOT NULL,
 	"note" TEXT NOT NULL,
@@ -36,11 +37,24 @@ CREATE TABLE transactions (
 	"date_time_modified" INTEGER NULL,
 	"original_date_due" INTEGER NULL,
 	"income" INTEGER NOT NULL DEFAULT 0,
+	"period_length" INTEGER NULL,
+	"reoccurrence" INTEGER NULL,
+	"end_date" INTEGER NULL,
+	"upcoming_transaction_notification" INTEGER NULL,
+	"type" INTEGER NULL,
 	"paid" INTEGER NOT NULL DEFAULT 0,
+	"created_another_future_transaction" INTEGER NULL,
 	"skip_paid" INTEGER NOT NULL DEFAULT 0,
+	"objective_fk" TEXT NULL,
+	"objective_loan_fk" TEXT NULL,
 	PRIMARY KEY ("transaction_pk")
 );
 `
+
+// strP and int64P build the pointer values handler.EnrichedExpense's fields need, keeping test
+// literals concise.
+func strP(s string) *string { return &s }
+func int64P(v int64) *int64 { return &v }
 
 // newTestDB creates a temporary Cashew-shaped SQLite file, seeded with rows, and returns an open
 // Store plus the file path.
@@ -141,17 +155,58 @@ var _ = Describe("FindExactMatch and FindCandidates", func() {
 	})
 })
 
+// dateCreated is a fixed reference timestamp ("2024-01-02T10:00:00Z") used across Insert tests,
+// standing in for the value internal/handler.Enricher would have already computed from the raw
+// SMS date before building the EnrichedExpense passed to Insert.
+var dateCreated = mustParseRFC3339("2024-01-02T10:00:00Z")
+
+func mustParseRFC3339(s string) int64 {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		panic(err)
+	}
+	return t.Unix()
+}
+
+var _ = Describe("FindSimilarTransaction", func() {
+	It("copies the no-source fields from the most recent matching transaction", func() {
+		s, _ := newTestDB(
+			`INSERT INTO transactions (transaction_pk, name, amount, note, category_fk, wallet_fk, date_created, income, period_length, reoccurrence, upcoming_transaction_notification, paid, created_another_future_transaction, skip_paid, original_date_due)
+			 VALUES ('t1', 'Maxi', 5.0, 'MAXI 1', 'cat-1', 'wallet-1', 1000, 0, 1, 3, 1, 1, 0, 1, 500)`,
+			`INSERT INTO transactions (transaction_pk, name, amount, note, category_fk, wallet_fk, date_created, income, period_length, reoccurrence, upcoming_transaction_notification, paid, created_another_future_transaction, skip_paid, original_date_due)
+			 VALUES ('t2', 'Maxi', 6.0, 'MAXI 2', 'cat-1', 'wallet-1', 2000, 0, 1, 3, 1, 1, 0, 1, 700)`,
+		)
+		defer s.Close()
+
+		similar, ok, err := s.FindSimilarTransaction(context.Background(), "MAXI 2")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(similar.OriginalDateDue).To(HaveValue(Equal(int64(700))))
+		Expect(similar.PeriodLength).To(HaveValue(Equal(int64(1))))
+		Expect(similar.Reoccurrence).To(HaveValue(Equal(int64(3))))
+	})
+
+	It("returns ok=false when nothing matches", func() {
+		s, _ := newTestDB()
+		defer s.Close()
+
+		_, ok, err := s.FindSimilarTransaction(context.Background(), "nowhere")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeFalse())
+	})
+})
+
 var _ = Describe("Insert", func() {
 	It("inserts a new expense", func() {
 		s, _ := newTestDB()
 		defer s.Close()
 
 		result, err := s.Insert(context.Background(), handler.EnrichedExpense{
-			Name:       "Starbucks",
-			Amount:     5.5,
-			CategoryFK: "cat-coffee",
-			WalletFK:   "wallet-1",
-			Date:       "2024-01-02T10:00:00Z",
+			Name:        strP("Starbucks"),
+			Amount:      -5.5,
+			CategoryFK:  strP("cat-coffee"),
+			WalletFK:    strP("wallet-1"),
+			DateCreated: dateCreated,
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Duplicate).To(BeFalse())
@@ -167,11 +222,11 @@ var _ = Describe("Insert", func() {
 		defer s.Close()
 
 		exp := handler.EnrichedExpense{
-			Name:       "Starbucks",
-			Amount:     5.5,
-			CategoryFK: "cat-coffee",
-			WalletFK:   "wallet-1",
-			Date:       "2024-01-02T10:00:00Z",
+			Name:        strP("Starbucks"),
+			Amount:      -5.5,
+			CategoryFK:  strP("cat-coffee"),
+			WalletFK:    strP("wallet-1"),
+			DateCreated: dateCreated,
 		}
 
 		first, err := s.Insert(context.Background(), exp)
@@ -189,41 +244,38 @@ var _ = Describe("Insert", func() {
 		Expect(cands[0].Count).To(Equal(1))
 	})
 
-	It("stores amount with Cashew's sign convention and timestamps in Unix seconds", func() {
+	It("stores the amount and timestamps exactly as given (Enricher already applied Cashew's sign convention)", func() {
 		s, _ := newTestDB()
 		defer s.Close()
 
-		before := time.Now().Unix()
 		result, err := s.Insert(context.Background(), handler.EnrichedExpense{
-			Name:       "Starbucks",
-			Amount:     5.5,
-			CategoryFK: "cat-coffee",
-			WalletFK:   "wallet-1",
-			Date:       "2024-01-02T10:00:00Z",
-			Income:     false,
+			Name:        strP("Starbucks"),
+			Amount:      -5.5,
+			CategoryFK:  strP("cat-coffee"),
+			WalletFK:    strP("wallet-1"),
+			DateCreated: dateCreated,
+			Income:      int64P(0),
 		})
 		Expect(err).NotTo(HaveOccurred())
 
 		var amount float64
-		var dateCreated int64
+		var gotDateCreated int64
 		row := s.db.QueryRow(`SELECT amount, date_created FROM transactions WHERE transaction_pk = ?`, result.TransactionPK)
-		Expect(row.Scan(&amount, &dateCreated)).To(Succeed())
+		Expect(row.Scan(&amount, &gotDateCreated)).To(Succeed())
 
 		// Expenses (income=false) must be stored as a negative amount.
 		Expect(amount).To(Equal(-5.5))
-		// date_created must be a Unix-seconds epoch (10 digits, not milliseconds), matching the
-		// value implied by the RFC3339 exp.Date.
-		expected, _ := time.Parse(time.RFC3339, "2024-01-02T10:00:00Z")
-		Expect(dateCreated).To(Equal(expected.Unix()))
-		Expect(dateCreated).To(BeNumerically("<", before+86400)) // sane seconds-range, not millis
+		// date_created must be stored as the Unix-seconds epoch (10 digits, not milliseconds)
+		// Enrich already computed it as.
+		Expect(gotDateCreated).To(Equal(dateCreated))
 
 		incomeResult, err := s.Insert(context.Background(), handler.EnrichedExpense{
-			Name:       "Salary",
-			Amount:     100,
-			CategoryFK: "cat-income",
-			WalletFK:   "wallet-1",
-			Date:       "2024-01-02T10:00:00Z",
-			Income:     true,
+			Name:        strP("Salary"),
+			Amount:      100,
+			CategoryFK:  strP("cat-income"),
+			WalletFK:    strP("wallet-1"),
+			DateCreated: dateCreated,
+			Income:      int64P(1),
 		})
 		Expect(err).NotTo(HaveOccurred())
 		var incomeAmount float64
@@ -236,16 +288,16 @@ var _ = Describe("Insert", func() {
 		defer s.Close()
 
 		exp := handler.EnrichedExpense{
-			Name:       "Starbucks",
-			Amount:     5.5,
-			CategoryFK: "cat-coffee",
-			WalletFK:   "wallet-1",
-			Date:       "2024-01-02T10:00:00Z",
+			Name:        strP("Starbucks"),
+			Amount:      -5.5,
+			CategoryFK:  strP("cat-coffee"),
+			WalletFK:    strP("wallet-1"),
+			DateCreated: dateCreated,
 		}
 		_, err := s.Insert(context.Background(), exp)
 		Expect(err).NotTo(HaveOccurred())
 
-		exp.Date = "2024-01-03T10:00:00Z"
+		exp.DateCreated = mustParseRFC3339("2024-01-03T10:00:00Z")
 		result, err := s.Insert(context.Background(), exp)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Duplicate).To(BeFalse())
