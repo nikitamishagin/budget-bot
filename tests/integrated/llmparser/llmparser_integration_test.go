@@ -1,17 +1,17 @@
 //go:build integration
 
-// Package integrated contains integration tests that talk to a real, locally running LLM
+// Package llmparser_test contains integration tests that talk to a real, locally running LLM
 // inference server (llama.cpp OpenAI-compatible API). They are excluded from the default
 // `go test ./...` run via the "integration" build tag, since they require external
 // infrastructure and are comparatively slow/non-deterministic (LLM output). Run them explicitly
 // with:
 //
-//	go test -tags=integration ./tests/integrated/...
+//	go test -tags=integration ./tests/integrated/llmparser/...
 //
 // Configuration is taken from the standard config file (see config.example.yaml), so the
 // server URL, model name and API key never need to be hardcoded here. Override the config
 // path with the BUDGET_BOT_TEST_CONFIG environment variable if needed.
-package integrated
+package llmparser_test
 
 import (
 	"context"
@@ -36,7 +36,7 @@ func TestLLMParserIntegration(t *testing.T) {
 // defaultTestConfigPath points at the repository's example config, which is enough to reach the
 // locally running llama.cpp server; it can be overridden via BUDGET_BOT_TEST_CONFIG for setups
 // with a different config file (e.g. a real config.yaml with a non-default API key).
-const defaultTestConfigPath = "../../config.example.yaml"
+const defaultTestConfigPath = "../../../config.example.yaml"
 
 // screenshotCase pairs a screenshot file (without extension) with its expected parsed expenses,
 // as recorded in answers.json.

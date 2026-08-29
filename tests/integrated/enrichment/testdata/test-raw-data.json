@@ -1,0 +1,56 @@
+[
+  {
+    "type": "expense",
+    "amount": 894.45,
+    "currency": "RSD",
+    "bank_account": "1391",
+    "date": "2026.08.20 12:31",
+    "description": "213 - MAXI 779",
+    "parse_failed": false
+  },
+  {
+    "type": "expense",
+    "amount": 3264.87,
+    "currency": "RSD",
+    "bank_account": "1391",
+    "date": "2026.08.20 18:06",
+    "description": "LIDL NEW",
+    "parse_failed": false
+  },
+  {
+    "type": "expense",
+    "amount": 290.00,
+    "currency": "RSD",
+    "bank_account": "1391",
+    "date": "2026.08.21 13:19",
+    "description": "KAFETERIJA SANK",
+    "parse_failed": false
+  },
+  {
+    "type": "expense",
+    "amount": 54.99,
+    "currency": "RSD",
+    "bank_account": "1391",
+    "date": "2026.08.22 13:49",
+    "description": "214 - MAXI 179",
+    "parse_failed": false
+  },
+  {
+    "type": "expense",
+    "amount": 1886.99,
+    "currency": "RSD",
+    "bank_account": "1391",
+    "date": "2026.08.22 15:27",
+    "description": "APOTEKA 139>BEO",
+    "parse_failed": false
+  },
+  {
+    "type": "expense",
+    "amount": 217.00,
+    "currency": "RSD",
+    "bank_account": "1391",
+    "date": "2026.08.22 15:31",
+    "description": "LIDL 194 NOVI B",
+    "parse_failed": false
+  }
+]
