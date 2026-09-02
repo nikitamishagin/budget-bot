@@ -14,7 +14,7 @@ func TestLLMParser(t *testing.T) {
 
 var _ = Describe("parseExpensesJSON", func() {
 	It("parses a plain JSON object as a single-item list", func() {
-		content := `{"type":"expense","amount":12.5,"currency":"USD","bank_account":"1234","date":"2024-01-01","topic":"Coffee Shop","category":"restaurant","description":"Coffee purchase","parse_failed":false}`
+		content := `{"type":"expense","amount":12.5,"currency":"USD","bank_account":"1234","date":"2024-01-01","description":"Coffee Shop","parse_failed":false}`
 
 		expenses, err := parseExpensesJSON(content)
 
@@ -28,7 +28,7 @@ var _ = Describe("parseExpensesJSON", func() {
 	})
 
 	It("parses JSON wrapped in markdown code fences and extra text", func() {
-		content := "Here is the result:\n```json\n[{\"type\":\"income\",\"amount\":100,\"currency\":\"EUR\",\"bank_account\":\"\",\"date\":\"\",\"topic\":\"Salary\",\"category\":\"salary\",\"description\":\"Monthly salary\",\"parse_failed\":false}]\n```\nDone."
+		content := "Here is the result:\n```json\n[{\"type\":\"income\",\"amount\":100,\"currency\":\"EUR\",\"bank_account\":\"\",\"date\":\"\",\"description\":\"Salary\",\"parse_failed\":false}]\n```\nDone."
 
 		expenses, err := parseExpensesJSON(content)
 
@@ -36,10 +36,11 @@ var _ = Describe("parseExpensesJSON", func() {
 		Expect(expenses).To(HaveLen(1))
 		Expect(expenses[0].Type).To(Equal(TransactionIncome))
 		Expect(expenses[0].Amount).To(Equal(100.0))
+		Expect(expenses[0].Description).To(Equal("Salary"))
 	})
 
 	It("parses a JSON array with several SMS messages", func() {
-		content := `[{"type":"expense","amount":10,"currency":"USD","bank_account":"1111","date":"2024-01-01","topic":"Shop A","category":"groceries","description":"Purchase A","parse_failed":false},{"type":"expense","amount":20,"currency":"USD","bank_account":"2222","date":"2024-01-02","topic":"Shop B","category":"transport","description":"Purchase B","parse_failed":false}]`
+		content := `[{"type":"expense","amount":10,"currency":"USD","bank_account":"1111","date":"2024-01-01","description":"Shop A","parse_failed":false},{"type":"expense","amount":20,"currency":"USD","bank_account":"2222","date":"2024-01-02","description":"Shop B","parse_failed":false}]`
 
 		expenses, err := parseExpensesJSON(content)
 
