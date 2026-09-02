@@ -2,8 +2,7 @@
 
 ## Project goal
 
-Expense Agent is a Go daemon that automates personal expense tracking. It runs on a local machine and ties together: an
-LLM for parsing, a local SQLite database, Telegram bot (as a source of data about expenses).
+Expense Agent is a Go daemon that automates personal expense tracking.
 
 ## Core responsibilities
 
@@ -18,26 +17,6 @@ LLM for parsing, a local SQLite database, Telegram bot (as a source of data abou
   etc. to learn more and more how to handle expenses.
 - Duplicate/conflict handling — before/after insert, detect duplicate entries (e.g., same expenses, same transaction
   twice) and resolve conflicts in the table.
-
-## Tech stack
-
-- Language: Go version 1.26.6
-- LLM runtime: llama.cpp, OpenAI-compatible API, local inference
-    - Model: Qwen3.5-9B-NVFP4-GGUF (swappable — don't hardcode the model name where avoidable)
-    - Hardware: RTX 5070 12GB VRAM, 16GB RAM — keep this in mind for context window / concurrency limits when designing
-      LLM calls
-    - Context window: 128000 tokens
-- Storage: SQLite (single file)
-- External services: Telegram Bot API
-- Agent memory: Postgres database
-- OS: Ubuntu 26.04
-
-Frameworks:
-
-- CMD: cobra
-- Tests: gomega amd ginkgo
-- Logging: zerolog
-- Config: yaml and viper
 
 ## Architecture / project layout
 
@@ -58,44 +37,6 @@ together end-to-end:
 - `internal/store` — SQLite access: inserting parsed expenses, duplicate/conflict detection before and after insert.
 - `internal/config` — YAML + Viper configuration loading (LLM, memory, telegram sections).
 - something else if it can be helpful
-
-## Go coding conventions and best practices
-
-- Follow standard Go idioms: run `gofmt`/`goimports` before every commit; keep `golangci-lint` clean.
-- Prefer simplicity over abstraction — avoid introducing interfaces or extra layers until at least two concrete
-  implementations exist.
-- Return errors, don't panic, in library/package code; wrap errors with `fmt.Errorf("...: %w", err)` to preserve
-  context, and use `errors.Is`/`errors.As` (or `errors.AsType[T]`) for error inspection.
-- Use `context.Context` as the first parameter for any function doing I/O (HTTP calls, DB queries) and respect
-  cancellation/timeouts.
-- Keep exported APIs minimal; unexported types and functions by default, export only what other packages actually need.
-- Table-driven tests with Ginkgo/Gomega for anything with multiple branches or edge cases (refund vs. expense vs.
-  transfer vs. failed parse, duplicate vs. new transaction, etc.).
-- Structured logging via `zerolog` with appropriate levels (`Debug` for request/response bodies, `Info` for high-level
-  lifecycle events, `Warn`/`Error` for recoverable/unrecoverable failures) — never log secrets (API keys, bot tokens) or
-  full user financial data at `Info` level or above.
-- Prefer modern Go 1.26 idioms where they simplify code: `slices`/`maps` packages, `min`/`max`, `for i := range n`,
-  `errors.Join`, `t.Context()` in tests, `wg.Go` for goroutines spawned from a `sync.WaitGroup`, and `omitzero` (not
-  `omitempty`) for `time.Time`/`time.Duration`/struct/slice/ map JSON fields.
-- Keep configuration (secrets, settings) in the YAML config file loaded via viper — never hardcode tokens, API keys,
-  hosts, or model names in code.
-- One package, one responsibility: don't reach across `internal/` package boundaries except through their public API;
-  keep `internal/handler` as the only place that orchestrates `internal/memory`, `internal/llmparser`, and
-  `internal/store` together.
-
-## LLM parsing notes
-
-- Input: screenshots of SMS messages, in varying formats.
-- Output raw JSON schema: `{amount, currency, bank_account, date, topic}` (plus `type`, `parse_failed`,
-  `failure_reason` — see `internal/llmparser/types.go`).
-- Edge cases handled: normal expense, refund, failed parse, transfer between accounts, income.
-
-## Known constraints / things to remember
-
-- The LLM must parse images to extract SMS data about expenses.
-- An SQLite file must be received from the user before adding new expenses.
-- After changing an SQLite file and getting a user approval, the agent must return the updated file to the user in a
-  Telegram message.
 
 ## The main loop
 
@@ -128,7 +69,9 @@ together end-to-end:
     complete.
 16. To repeat the cycle, the user sends a new SQLite database file.
 
-## Data schemas
+## Data schemas (parsing)
+
+LLM input: screenshots of SMS messages, in varying formats.
 
 Expected raw data from LLM:
 
@@ -140,6 +83,8 @@ Expected raw data from LLM:
 - description - string
 - parse_failed - bool
 - failure_reason - string, omitempty
+
+Edge cases handled: normal expense, refund, failed parse, transfer between accounts, income.
 
 ## Enrichment Process
 
