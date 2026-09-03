@@ -5,7 +5,7 @@
       "name": "Sank",
       "amount": -290,
       "note": "KAFETERIJA SANK",
-      "category_fk": 1,
+      "category_fk": "1",
       "sub_category_fk": "2b2c6cc2-6504-4360-bab5-ecbbd7889263",
       "wallet_fk": "6986664f-0ce4-4bfd-938b-db76cec82754",
       "date_created": 1788008040,
