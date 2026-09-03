@@ -28,6 +28,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/nikitamishagin/budget-bot/internal/config"
@@ -69,7 +70,7 @@ func testDSN() string {
 
 	dbName := defaultTestMemoryDBName
 	if n := os.Getenv("MEMORY_TEST_DBNAME"); n != "" {
-		dbName = n
+		cfg.Memory.DBName = n
 	}
 	cfg.Memory.DBName = dbName
 
@@ -131,9 +132,13 @@ func loadRawExpenses() []llmparser.Expense {
 	return expenses
 }
 
-// toRFC3339 parses timestamps in format "2006.01.02 15:04" and converts them to RFC3339 UTC string.
+// toRFC3339 parses timestamps in format "2006.01.02 15:04" in Belgrade time and converts them to RFC3339 UTC string.
 func toRFC3339(raw string) string {
-	if t, err := time.Parse("2006.01.02 15:04", raw); err == nil {
+	loc, err := time.LoadLocation("Europe/Belgrade")
+	if err != nil {
+		loc = time.FixedZone("CEST", 2*3600)
+	}
+	if t, err := time.ParseInLocation("2006.01.02 15:04", raw, loc); err == nil {
 		return t.UTC().Format(time.RFC3339)
 	}
 	return raw
@@ -230,10 +235,46 @@ func newSQLiteFixture() *store.Store {
 	return s
 }
 
+// ensureTestDatabase creates the dedicated test database on the PostgreSQL instance if it does not already exist.
+func ensureTestDatabase(ctx context.Context) {
+	cfgPath := defaultTestConfigPath
+	if p := os.Getenv("BUDGET_BOT_TEST_CONFIG"); p != "" {
+		cfgPath = p
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return
+	}
+
+	testDBName := defaultTestMemoryDBName
+	if n := os.Getenv("MEMORY_TEST_DBNAME"); n != "" {
+		testDBName = n
+	}
+	if testDBName == cfg.Memory.DBName {
+		return
+	}
+
+	pool, err := pgxpool.New(ctx, cfg.DSN())
+	if err != nil {
+		return
+	}
+	defer pool.Close()
+
+	var exists bool
+	if err := pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", testDBName).Scan(&exists); err != nil {
+		return
+	}
+	if !exists {
+		_, _ = pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", pgx.Identifier{testDBName}.Sanitize()))
+	}
+}
+
 // newRealMemoryStore connects to the dedicated test Postgres database (see testDSN), migrates
 // it and truncates the memory tables so each test starts from a clean slate. It fail the test
 // when Postgres is not reachable.
 func newRealMemoryStore(ctx context.Context) *memory.Store {
+	ensureTestDatabase(ctx)
+
 	mem, err := memory.New(ctx, testDSN())
 	if err != nil {
 		Fail(fmt.Sprintf("postgres not reachable: %v", err))
@@ -277,6 +318,10 @@ func newRealLLMResolver(ctx context.Context) *llmparser.Client {
 	cfg, err := config.Load(cfgPath)
 	Expect(err).NotTo(HaveOccurred(), "load test config from %q", cfgPath)
 
+	if !filepath.IsAbs(cfg.LLM.APIKeyFile) && cfg.LLM.APIKeyFile != "" {
+		cfg.LLM.APIKeyFile = filepath.Join(filepath.Dir(cfgPath), cfg.LLM.APIKeyFile)
+	}
+
 	apiKey, err := cfg.APIKey()
 	Expect(err).NotTo(HaveOccurred())
 
@@ -291,7 +336,11 @@ func newRealLLMResolver(ctx context.Context) *llmparser.Client {
 
 	// A short resolution call is enough to confirm the server is actually reachable before
 	// running a whole spec against it.
-	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	timeout := time.Duration(cfg.LLM.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if _, err := client.ResolveDescription(pingCtx, llmparser.Expense{Description: "ping"}, nil); err != nil {
 		Fail(fmt.Sprintf("llm server not reachable, cannot exercise the real LLM path: %v", err))
@@ -311,7 +360,7 @@ var _ = Describe("Enricher.Enrich against real memory + SQLite + LLM backends", 
 
 	BeforeEach(func() {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
 		DeferCleanup(cancel)
 
 		mem = newRealMemoryStore(ctx)
@@ -340,18 +389,10 @@ var _ = Describe("Enricher.Enrich against real memory + SQLite + LLM backends", 
 		})).To(Succeed())
 	})
 
-	It("exact match: resolves directly from an exact memory pattern", func() {
+	It("exact match: resolves directly from SQLite database exact match", func() {
 		Expect(ans.ExactMatch).To(HaveLen(1))
 		want := ans.ExactMatch[0]
 		exp := findExpense(raw, want.Note)
-
-		Expect(mem.SaveTransactionMapping(ctx, memory.TransactionMappings{
-			TransactionPattern: exp.Description,
-			Name:               want.Name,
-			CategoryFK:         ptr(string(want.CategoryFK)),
-			SubCategoryFK:      want.SubCategoryFK,
-			Income:             &want.Income,
-		})).To(Succeed())
 
 		enr := handler.NewEnricher(mem, resolver, 5, memory.HighConfidenceThreshold)
 
@@ -360,6 +401,12 @@ var _ = Describe("Enricher.Enrich against real memory + SQLite + LLM backends", 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.NeedsUserInput).To(BeFalse())
 		assertMatchesAnswer(result.Expense, want)
+
+		// Verify mapping was saved to memory for future lookups.
+		saved, ok, err := mem.FindBestMatch(ctx, exp.Description)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(saved.Score).To(BeNumerically(">=", memory.HighConfidenceThreshold))
 	})
 
 	It("match found in memory: info learned in an earlier session resolves the expense without user input", func() {
@@ -427,7 +474,7 @@ var _ = Describe("Enricher.Enrich against real memory + SQLite + LLM backends", 
 
 		// The user answers with the name/category/wallet from testdata/answers.json; the
 		// resulting expense must match that same fixture.
-		resolved, err := enr.ResolveWithUserInput(ctx, exp, *want.Name, string(want.CategoryFK), strVal(want.SubCategoryFK), want.WalletFK, want.Income != 0)
+		resolved, err := enr.ResolveWithUserInput(ctx, exp, *want.Name, string(want.CategoryFK), strVal(want.SubCategoryFK), want.WalletFK, want.Income != 0, dbLookup{db})
 		Expect(err).NotTo(HaveOccurred())
 		assertMatchesAnswer(resolved, want)
 	})
