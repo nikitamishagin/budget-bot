@@ -39,7 +39,7 @@ type Client struct {
 
 // NewClient creates a Client for the given base URL (e.g. "http://127.0.0.1:8080/v1"),
 // API key, model name, and request timeout. maxTokensParse/maxTokensResolve cap the number of
-// generated tokens for image parsing and topic resolution requests respectively; a value <= 0
+// generated tokens for image parsing and description resolution requests respectively; a value <= 0
 // falls back to a sane default.
 func NewClient(baseURL, apiKey, model string, timeout time.Duration, maxTokensParse, maxTokensResolve int) *Client {
 	if maxTokensParse <= 0 {

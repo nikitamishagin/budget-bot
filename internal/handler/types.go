@@ -8,7 +8,7 @@ package handler
 type EnrichedExpense struct {
 	PairedTransactionFK *string `db:"paired_transaction_fk"` // The key defining which transaction is paired with another one. Used only for transfers from one wallet to another.
 	// Name of transaction. Can be found in the "associated_titles" table (key title) of the SQLite database, or in the agent's memory.
-	// If not found an exact match, resolution can be requested from llm (ResolveTopic) or from the user (ResolveWithUserInput).
+	// If not found an exact match, resolution can be requested from llm (ResolveDescription) or from the user (ResolveWithUserInput).
 	Name                            *string `db:"name"`
 	Amount                          float64 `db:"amount"`             // The transaction amount. Attention: expenses are always negative, income is positive!
 	Note                            *string `db:"note"`               // The raw description of the merchant/counterparty from the SMS data.

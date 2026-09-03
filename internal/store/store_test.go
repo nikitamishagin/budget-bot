@@ -96,18 +96,19 @@ var _ = Describe("Open", func() {
 })
 
 var _ = Describe("FindExactMatch and FindCandidates", func() {
-	It("finds the most common enrichment for an exact name match", func() {
+	It("finds the most common enrichment for an exact description match", func() {
 		s, _ := newTestDB(
 			`INSERT INTO transactions (transaction_pk, name, amount, note, category_fk, wallet_fk, date_created, income, paid, skip_paid)
-			 VALUES ('t1', 'Starbucks', 5.0, '', 'cat-coffee', 'wallet-1', 1000, 0, 1, 0)`,
+			 VALUES ('t1', 'Starbucks Coffee', 5.0, 'Starbucks', 'cat-coffee', 'wallet-1', 1000, 0, 1, 0)`,
 			`INSERT INTO transactions (transaction_pk, name, amount, note, category_fk, wallet_fk, date_created, income, paid, skip_paid)
-			 VALUES ('t2', 'Starbucks', 6.0, '', 'cat-coffee', 'wallet-1', 2000, 0, 1, 0)`,
+			 VALUES ('t2', 'Starbucks Coffee', 6.0, 'Starbucks', 'cat-coffee', 'wallet-1', 2000, 0, 1, 0)`,
 		)
 		defer s.Close()
 
 		c, ok, err := s.FindExactMatch(context.Background(), "Starbucks")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ok).To(BeTrue())
+		Expect(c.Name).To(Equal("Starbucks Coffee"))
 		Expect(c.CategoryFK).To(Equal("cat-coffee"))
 		Expect(c.WalletFK).To(Equal("wallet-1"))
 		Expect(c.Count).To(Equal(2))
@@ -125,11 +126,11 @@ var _ = Describe("FindExactMatch and FindCandidates", func() {
 	It("finds fuzzy/substring candidates, most frequent first", func() {
 		s, _ := newTestDB(
 			`INSERT INTO transactions (transaction_pk, name, amount, note, category_fk, wallet_fk, date_created, income, paid, skip_paid)
-			 VALUES ('t1', 'Coffee Shop A', 5.0, '', 'cat-coffee', 'wallet-1', 1000, 0, 1, 0)`,
+			 VALUES ('t1', 'Coffee Shop A', 5.0, 'Coffee Shop A', 'cat-coffee', 'wallet-1', 1000, 0, 1, 0)`,
 			`INSERT INTO transactions (transaction_pk, name, amount, note, category_fk, wallet_fk, date_created, income, paid, skip_paid)
-			 VALUES ('t2', 'Coffee Shop B', 6.0, '', 'cat-coffee', 'wallet-1', 2000, 0, 1, 0)`,
+			 VALUES ('t2', 'Coffee Shop B', 6.0, 'Coffee Shop B', 'cat-coffee', 'wallet-1', 2000, 0, 1, 0)`,
 			`INSERT INTO transactions (transaction_pk, name, amount, note, category_fk, wallet_fk, date_created, income, paid, skip_paid)
-			 VALUES ('t3', 'Coffee Shop B', 6.0, '', 'cat-coffee', 'wallet-1', 3000, 0, 1, 0)`,
+			 VALUES ('t3', 'Coffee Shop B', 6.0, 'Coffee Shop B', 'cat-coffee', 'wallet-1', 3000, 0, 1, 0)`,
 		)
 		defer s.Close()
 
@@ -143,9 +144,9 @@ var _ = Describe("FindExactMatch and FindCandidates", func() {
 	It("never returns more than the requested limit", func() {
 		s, _ := newTestDB(
 			`INSERT INTO transactions (transaction_pk, name, amount, note, category_fk, wallet_fk, date_created, income, paid, skip_paid)
-			 VALUES ('t1', 'Shop A', 5.0, '', 'cat-1', 'wallet-1', 1000, 0, 1, 0)`,
+			 VALUES ('t1', 'Shop A', 5.0, 'Shop A', 'cat-1', 'wallet-1', 1000, 0, 1, 0)`,
 			`INSERT INTO transactions (transaction_pk, name, amount, note, category_fk, wallet_fk, date_created, income, paid, skip_paid)
-			 VALUES ('t2', 'Shop B', 6.0, '', 'cat-2', 'wallet-1', 2000, 0, 1, 0)`,
+			 VALUES ('t2', 'Shop B', 6.0, 'Shop B', 'cat-2', 'wallet-1', 2000, 0, 1, 0)`,
 		)
 		defer s.Close()
 
@@ -203,6 +204,7 @@ var _ = Describe("Insert", func() {
 
 		result, err := s.Insert(context.Background(), handler.EnrichedExpense{
 			Name:        strP("Starbucks"),
+			Note:        strP("Starbucks"),
 			Amount:      -5.5,
 			CategoryFK:  strP("cat-coffee"),
 			WalletFK:    strP("wallet-1"),
@@ -223,6 +225,7 @@ var _ = Describe("Insert", func() {
 
 		exp := handler.EnrichedExpense{
 			Name:        strP("Starbucks"),
+			Note:        strP("Starbucks"),
 			Amount:      -5.5,
 			CategoryFK:  strP("cat-coffee"),
 			WalletFK:    strP("wallet-1"),

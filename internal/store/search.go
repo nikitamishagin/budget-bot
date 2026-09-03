@@ -21,17 +21,15 @@ type Candidate struct {
 }
 
 // FindExactMatch returns the most common enrichment used for transactions whose raw SMS
-// description (note) or display name matches topic exactly (case-insensitive), if any. Matching
-// on note lets the raw description drive lookups, while still falling back to name for
-// transactions inserted before note was tracked.
-func (s *Store) FindExactMatch(ctx context.Context, topic string) (Candidate, bool, error) {
+// description (note) matches description exactly (case-insensitive), if any.
+func (s *Store) FindExactMatch(ctx context.Context, description string) (Candidate, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT name, category_fk, COALESCE(sub_category_fk, ''), wallet_fk, income, COUNT(*) AS c
 		FROM transactions
-		WHERE note = ? COLLATE NOCASE OR name = ? COLLATE NOCASE
+		WHERE note = ? COLLATE NOCASE
 		GROUP BY name, category_fk, sub_category_fk, wallet_fk, income
 		ORDER BY c DESC
-		LIMIT 1`, topic, topic)
+		LIMIT 1`, description)
 
 	c, err := scanCandidate(row)
 	if err != nil {
@@ -44,10 +42,10 @@ func (s *Store) FindExactMatch(ctx context.Context, topic string) (Candidate, bo
 }
 
 // FindCandidates returns up to limit distinct enrichment combinations for transactions whose raw
-// SMS description (note) or display name contains topic as a case-insensitive substring, most
+// SMS description (note) contains description as a case-insensitive substring, most
 // frequently used first. It never returns more than limit rows, so the SQLite file's contents are
 // never dumped wholesale to the caller (e.g., an LLM prompt).
-func (s *Store) FindCandidates(ctx context.Context, topic string, limit int) ([]Candidate, error) {
+func (s *Store) FindCandidates(ctx context.Context, description string, limit int) ([]Candidate, error) {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -55,10 +53,10 @@ func (s *Store) FindCandidates(ctx context.Context, topic string, limit int) ([]
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT name, category_fk, COALESCE(sub_category_fk, ''), wallet_fk, income, COUNT(*) AS c
 		FROM transactions
-		WHERE note LIKE '%' || ? || '%' COLLATE NOCASE OR name LIKE '%' || ? || '%' COLLATE NOCASE
+		WHERE note LIKE '%' || ? || '%' COLLATE NOCASE
 		GROUP BY name, category_fk, sub_category_fk, wallet_fk, income
 		ORDER BY c DESC
-		LIMIT ?`, topic, topic, limit)
+		LIMIT ?`, description, limit)
 	if err != nil {
 		return nil, fmt.Errorf("find candidates: %w", err)
 	}
@@ -109,7 +107,7 @@ type SimilarTransaction struct {
 }
 
 // FindSimilarTransaction returns the no-source enrichment fields of the most recent existing
-// transaction whose raw SMS description (note) or display name matches description, so the agent
+// transaction whose raw SMS description (note) matches description, so the agent
 // can copy them instead of inventing defaults. ok is false when no such transaction exists.
 func (s *Store) FindSimilarTransaction(ctx context.Context, description string) (SimilarTransaction, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
@@ -117,10 +115,10 @@ func (s *Store) FindSimilarTransaction(ctx context.Context, description string) 
 		       upcoming_transaction_notification, type, paid, created_another_future_transaction,
 		       skip_paid, objective_fk, objective_loan_fk
 		FROM transactions
-		WHERE note = ? COLLATE NOCASE OR name = ? COLLATE NOCASE
-		   OR note LIKE '%' || ? || '%' COLLATE NOCASE OR name LIKE '%' || ? || '%' COLLATE NOCASE
+		WHERE note = ? COLLATE NOCASE
+		   OR note LIKE '%' || ? || '%' COLLATE NOCASE
 		ORDER BY date_created DESC
-		LIMIT 1`, description, description, description, description)
+		LIMIT 1`, description, description)
 
 	var (
 		originalDateDue, periodLength, reoccurrence, endDate       sql.NullInt64

@@ -76,7 +76,7 @@ type fakeResolver struct {
 	lastCands  []llmparser.Candidate
 }
 
-func (f *fakeResolver) ResolveTopic(_ context.Context, _ llmparser.Expense, candidates []llmparser.Candidate) (llmparser.Resolution, error) {
+func (f *fakeResolver) ResolveDescription(_ context.Context, _ llmparser.Expense, candidates []llmparser.Candidate) (llmparser.Resolution, error) {
 	f.calls++
 	f.lastCands = candidates
 	return f.resolution, f.err

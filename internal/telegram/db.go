@@ -25,8 +25,8 @@ var openStore = func(path string) (ExpenseWriter, error) {
 	return &storeAdapter{store: s}, nil
 }
 
-func (a *storeAdapter) FindCandidates(ctx context.Context, topic string, limit int) ([]handler.DBCandidate, error) {
-	candidates, err := a.store.FindCandidates(ctx, topic, limit)
+func (a *storeAdapter) FindCandidates(ctx context.Context, description string, limit int) ([]handler.DBCandidate, error) {
+	candidates, err := a.store.FindCandidates(ctx, description, limit)
 	if err != nil {
 		return nil, fmt.Errorf("find db candidates: %w", err)
 	}

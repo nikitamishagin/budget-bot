@@ -315,7 +315,7 @@ func newRealLLMResolver(ctx context.Context) *llmparser.Client {
 	// running a whole spec against it.
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if _, err := client.ResolveTopic(pingCtx, llmparser.Expense{Description: "ping"}, nil); err != nil {
+	if _, err := client.ResolveDescription(pingCtx, llmparser.Expense{Description: "ping"}, nil); err != nil {
 		Fail(fmt.Sprintf("llm server not reachable, cannot exercise the real LLM path: %v", err))
 	}
 	return client

@@ -6,8 +6,8 @@ import (
 	"fmt"
 )
 
-// Candidate is a previously learned topic -> enrichment mapping, offered to the LLM as one of
-// the possible matches for a newly parsed expense's topic.
+// Candidate is a previously learned expense -> enrichment mapping, offered to the LLM as one of
+// the possible matches for a newly parsed expense's description.
 type Candidate struct {
 	Name          string `json:"name"`
 	CategoryFK    string `json:"category_fk"`
@@ -17,7 +17,7 @@ type Candidate struct {
 }
 
 // Resolution is the LLM's decision about which candidate (if any) matches a newly parsed
-// expense's topic, or a clarifying question to ask the user when none of the candidates fit.
+// expense's description, or a clarifying question to ask the user when none of the candidates fit.
 type Resolution struct {
 	// Matched indicates that MatchedIndex points to a candidate (or the new fields below are filled
 	// in directly) that should be used to enrich the expense.
@@ -27,7 +27,7 @@ type Resolution struct {
 	MatchedIndex int `json:"matched_index"`
 	// Name, CategoryFK, SubCategoryFK, WalletFK, Income let the LLM propose enrichment fields
 	// directly instead of pointing at a candidate, e.g. when it can confidently infer a category
-	// from the topic itself.
+	// from the description itself.
 	Name          string `json:"name"`
 	CategoryFK    string `json:"category_fk"`
 	SubCategoryFK string `json:"sub_category_fk,omitempty"`
@@ -39,11 +39,11 @@ type Resolution struct {
 	Question       string `json:"question,omitempty"`
 }
 
-// ResolveTopic asks the LLM to match a parsed expense's topic against a short list of previously
+// ResolveDescription asks the LLM to match a parsed expense's description against a short list of previously
 // learned candidates, or otherwise say that the user needs to be asked for missing information.
 // The candidates slice is expected to already be a short, pre-filtered top-N list: the full
 // memory table must never be passed here.
-func (c *Client) ResolveTopic(ctx context.Context, expense Expense, candidates []Candidate) (Resolution, error) {
+func (c *Client) ResolveDescription(ctx context.Context, expense Expense, candidates []Candidate) (Resolution, error) {
 	candidatesJSON, err := json.Marshal(candidates)
 	if err != nil {
 		return Resolution{}, fmt.Errorf("marshal candidates: %w", err)

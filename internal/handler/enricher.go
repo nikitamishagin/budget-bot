@@ -24,7 +24,7 @@ type MemoryStore interface {
 // Resolver asks an LLM to match a parsed expense's description against a short list of memory
 // candidates, or to say that the user must be asked for missing information.
 type Resolver interface {
-	ResolveTopic(ctx context.Context, expense llmparser.Expense, candidates []llmparser.Candidate) (llmparser.Resolution, error)
+	ResolveDescription(ctx context.Context, expense llmparser.Expense, candidates []llmparser.Candidate) (llmparser.Resolution, error)
 }
 
 // DBLookup finds fallback enrichment candidates directly in the user's SQLite database file,
@@ -151,7 +151,7 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		llmCandidates = dbToLLMCandidates(dbCandidates)
 	}
 
-	resolution, err := e.Resolver.ResolveTopic(ctx, exp, llmCandidates)
+	resolution, err := e.Resolver.ResolveDescription(ctx, exp, llmCandidates)
 	if err != nil {
 		return Result{}, fmt.Errorf("resolve description: %w", err)
 	}

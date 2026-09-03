@@ -29,7 +29,7 @@ iterative testing, and bug fixing).
 ## LLM parser
 
 The `internal/llmparser` package sends a bank SMS screenshot to a local OpenAI-compatible vision LLM (llama.cpp server)
-and returns structured expense data (amount, currency, account, date, topic, category, description).
+and returns structured expense data (Type, Amount, Currency, Account, Date, Description).
 
 ### Configuration
 

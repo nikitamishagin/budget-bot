@@ -11,8 +11,9 @@ Expense Agent is a Go daemon that automates personal expense tracking.
 - LLM parsing — sends raw screenshots to a local LLM (via llama.cpp OpenAI-compatible API) and gets back structured
   expense data (amount, currency, merchant, date, card number).
 - SQLite editor — reads data from the database file, inserts the new data (expenses) into the database file.
-- Finding a suitable topic — find a suitable topic for the expense in the database (e.g., expense with the same
-  description in the database) to provide additional context for the LLM, if the agent can't find exact matches.
+- Finding a suitable values — find a suitable name and category by description for the expense in the database (e.g.,
+  expense with the same description in the database) to provide additional context for the LLM, if the agent can't find
+  exact matches.
 - Memorizing — keep track of matching kinds of expenses and categories, card numbers and bank accounts, specific cases,
   etc. to learn more and more how to handle expenses.
 - Duplicate/conflict handling — before/after insert, detect duplicate entries (e.g., same expenses, same transaction
@@ -29,11 +30,11 @@ together end-to-end:
 - `internal/telegram` — Telegram bot backend: receives the SQLite file and screenshots, sends questions/results back to
   the user.
 - `internal/llmparser` — LLM prompts construction and parsing logic: sends screenshots to the local LLM and returns
-  structured `Expense` data; also resolves ambiguous topics/categories via LLM comparison.
-- `internal/memory` — Postgres-backed agent memory: learned topic/category/wallet mappings, bank account mappings,
+  structured `Expense` data; also resolves ambiguous name/categories via LLM comparison.
+- `internal/memory` — Postgres-backed agent memory: learned name/category/description mappings, bank account mappings,
   similarity search over past decisions.
-- `internal/handler` — Enrichment loop: finds suitable topics using memory/LLM/SQLite lookups, decides when a user
-  question is required, aggregates results into the final approval message.
+- `internal/handler` — Enrichment loop: finds a suitable name and category using memory/LLM/SQLite lookups, decides when
+  a user question is required, aggregates results into the final approval message.
 - `internal/store` — SQLite access: inserting parsed expenses, duplicate/conflict detection before and after insert.
 - `internal/config` — YAML + Viper configuration loading (LLM, memory, telegram sections).
 - something else if it can be helpful
@@ -101,69 +102,70 @@ agent also learns new information and persists it to memory.
 
 ### Raw SMS data (before enrichment)
 
-```go
+```
 type Expense struct {
-	Type TransactionType `json:"type"`      // Classifies the transaction, see TransactionType constants.
-	Amount float64 `json:"amount"`          // Transaction amount as printed in the SMS (always positive).
-	Currency string `json:"currency"`       // ISO 4217 currency code, e.g. "USD", "RUB".
-	Account string `json:"bank_account"`    // Bank account/card identifier from the SMS (e.g. last 4 digits).
-	Date string `json:"date"`               // Transaction date/time as printed, RFC3339 if determinable, else as-is.
-	Description string `json:"description"` // Merchant/counterparty name, or the other account for transfers.
-	ParseFailed bool `json:"parse_failed"`  // True if the model could not confidently extract data from the image.
-	FailureReason string `json:"failure_reason,omitempty"` // Why parsing failed; empty when ParseFailed is false.
+    Type TransactionType `json:"type"`      // Classifies the transaction, see TransactionType constants.
+    Amount float64 `json:"amount"`          // Transaction amount as printed in the SMS (always positive).
+    Currency string `json:"currency"`       // ISO 4217 currency code, e.g. "USD", "RUB".
+    Account string `json:"bank_account"`    // Bank account/card identifier from the SMS (e.g. last 4 digits).
+    Date string `json:"date"`               // Transaction date/time as printed, RFC3339 if determinable, else as-is.
+    Description string `json:"description"` // Merchant/counterparty name, or the other account for transfers.
+    ParseFailed bool `json:"parse_failed"`  // True if the model could not confidently extract data from the image.
+    FailureReason string `json:"failure_reason,omitempty"` // Why parsing failed; empty when ParseFailed is false.
 }
 ```
 
 ### Enriched expense (after enrichment)
 
-```go
+```
 type EnrichedExpense struct {
-	// FK marking which transaction is paired with another. Used only for wallet-to-wallet transfers.
-	PairedTransactionFK *string `db:"paired_transaction_fk"`
-	// Transaction name. Look up in sqlite "associated_titles" (by title) or agent memory first.
-	// If no exact match, resolve via LLM (ResolveTopic) or user input (ResolveWithUserInput).
-	Name *string `db:"name"`
-	// Transaction amount. Expenses are always negative, income is positive.
-	Amount float64 `db:"amount"`
-	// Raw merchant/counterparty description from the SMS data.
-	Note *string `db:"note"`
-	// Category FK. Look up in sqlite "categories" table or agent memory.
-	CategoryFK *string `db:"category_fk"`
-	// Subcategory FK. Look up in sqlite "categories" table or agent memory.
-	SubCategoryFK *string `db:"sub_category_fk"`
-	// Wallet FK from the sqlite "wallets" table.
-	WalletFK *string `db:"wallet_fk"`
-	// Date the transaction was completed (timestamp format, no seconds).
-	DateCreated int64 `db:"date_created"`
-	// Date the agent handled the transaction (timestamp format, no seconds).
-	DateTimeModified int64 `db:"date_time_modified"`
-	// Date from the matching/similar transaction in the sqlite database.
-	OriginalDateDue *int64 `db:"original_date_due"`
-	// Boolean as int (0 or 1).
-	Income *int64 `db:"income"`
-	// Period length in units defined by Reoccurrence (days, weeks, months, etc.).
-	PeriodLength *int64 `db:"period_length"`
-	// Reoccurrence key. Must be resolved from the sqlite database.
-	Reoccurrence *int64 `db:"reoccurrence"`
-	EndDate                         *int64  `db:"end_date"`
-	UpcomingTransactionNotification *int64  `db:"upcoming_transaction_notification"`
-	Type                            *int64  `db:"type"`
-	// 1 if the transaction was completed; 0 if it's a future transaction.
-	Paid *int64 `db:"paid"`
-	CreatedAnotherFutureTransaction *int64  `db:"created_another_future_transaction"`
-	SkipPaid                        *int64  `db:"skip_paid"`
-	MethodAdded                     *int64  `db:"method_added"`
-	TransactionOwnerEmail           *string `db:"transaction_owner_email"`
-	TransactionOriginalOwnerEmail   *string `db:"transaction_original_owner_email"`
-	SharedKey                       *string `db:"shared_key"`
-	SharedOldKey                    *string `db:"shared_old_key"`
-	SharedStatus                    *int64  `db:"shared_status"`
-	SharedDateUpdated               *int64  `db:"shared_date_updated"`
-	SharedReferenceBudgetPK         *string `db:"shared_reference_budget_pk"`
-	ObjectiveFK                     *string `db:"objective_fk"`
-	ObjectiveLoanFK                 *string `db:"objective_loan_fk"`
-	BudgetFksExclude                *string `db:"budget_fks_exclude"`
+    // FK marking which transaction is paired with another. Used only for wallet-to-wallet transfers.
+    PairedTransactionFK *string `db:"paired_transaction_fk"`
+    // Transaction name. Look up in sqlite "associated_titles" (by title) or agent memory first.
+    // If no exact match, resolve via LLM (ResolveDescription) or user input (ResolveWithUserInput).
+    Name *string `db:"name"`
+    // Transaction amount. Expenses are always negative, income is positive.
+    Amount float64 `db:"amount"`
+    // Raw merchant/counterparty description from the SMS data.
+    Note *string `db:"note"`
+    // Category FK. Look up in sqlite "categories" table or agent memory.
+    CategoryFK *string `db:"category_fk"`
+    // Subcategory FK. Look up in sqlite "categories" table or agent memory.
+    SubCategoryFK *string `db:"sub_category_fk"`
+    // Wallet FK from the sqlite "wallets" table.
+    WalletFK *string `db:"wallet_fk"`
+    // Date the transaction was completed (timestamp format, no seconds).
+    DateCreated int64 `db:"date_created"`
+    // Date the agent handled the transaction (timestamp format, no seconds).
+    DateTimeModified int64 `db:"date_time_modified"`
+    // Date from the matching/similar transaction in the sqlite database.
+    OriginalDateDue *int64 `db:"original_date_due"`
+    // Boolean as int (0 or 1).
+    Income *int64 `db:"income"`
+    // Period length in units defined by Reoccurrence (days, weeks, months, etc.).
+    PeriodLength *int64 `db:"period_length"`
+    // Reoccurrence key. Must be resolved from the sqlite database.
+    Reoccurrence *int64 `db:"reoccurrence"`
+    EndDate                         *int64  `db:"end_date"`
+    UpcomingTransactionNotification *int64  `db:"upcoming_transaction_notification"`
+    Type                            *int64  `db:"type"`
+    // 1 if the transaction was completed; 0 if it's a future transaction.
+    Paid *int64 `db:"paid"`
+    CreatedAnotherFutureTransaction *int64  `db:"created_another_future_transaction"`
+    SkipPaid                        *int64  `db:"skip_paid"`
+    MethodAdded                     *int64  `db:"method_added"`
+    TransactionOwnerEmail           *string `db:"transaction_owner_email"`
+    TransactionOriginalOwnerEmail   *string `db:"transaction_original_owner_email"`
+    SharedKey                       *string `db:"shared_key"`
+    SharedOldKey                    *string `db:"shared_old_key"`
+    SharedStatus                    *int64  `db:"shared_status"`
+    SharedDateUpdated               *int64  `db:"shared_date_updated"`
+    SharedReferenceBudgetPK         *string `db:"shared_reference_budget_pk"`
+    ObjectiveFK                     *string `db:"objective_fk"`
+    ObjectiveLoanFK                 *string `db:"objective_loan_fk"`
+    BudgetFksExclude                *string `db:"budget_fks_exclude"`
 }
+
 ```
 
 All uncommented keys must be obtained from the SQLite database.
@@ -180,7 +182,7 @@ creates any required tables that don't yet exist. It must never wipe or overwrit
 
 ### Table: wallet_mappings
 
-```go
+```
 type WalletMappings struct {
     AccountPattern string `db:"account_pattern"` // pattern from raw SMS, e.g. *0746, **3421, 190-126240-52
     Name           string `db:"name"`            // must match "name" in sqlite "wallets" table
@@ -192,7 +194,7 @@ type WalletMappings struct {
 
 ### Table: transaction_mappings
 
-```go
+```
 type TransactionMappings struct {
     TransactionPattern              string  `db:"transaction_pattern"` // merchant/counterparty/account name from raw SMS
     PairedTransactionFK             *string `db:"paired_transaction_fk"`
