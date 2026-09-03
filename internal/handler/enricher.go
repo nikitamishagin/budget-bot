@@ -134,6 +134,12 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		return Result{}, fmt.Errorf("find best memory match: %w", err)
 	}
 	if ok && best.Score >= e.HighConfidenceThreshold {
+		if (similar == DBSimilarFields{}) && best.Name != nil && *best.Name != "" {
+			sim, err := lookupSimilar(ctx, *best.Name, lookup)
+			if err == nil && (sim != DBSimilarFields{}) {
+				similar = sim
+			}
+		}
 		return Result{Expense: e.buildExpense(exp, best.TransactionMappings, walletFK, similar)}, nil
 	}
 
@@ -190,10 +196,8 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 // ResolveWithUserInput records the user-supplied enrichment fields for a previously ambiguous
 // expense into memory and returns the now-complete EnrichedExpense. Any decision made (by the LLM
 // or the user) flows back into memory, so the same description/account is recognized automatically
-// next time. The fields with no source in raw SMS data (see DBSimilarFields) are left nil here,
-// since no SQLite database is consulted at this point; they stay NULL, per AGENTS.md's field
-// resolution rule, unless a later high-confidence memory hit already has them cached.
-func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool) (*EnrichedExpense, error) {
+// next time.
+func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool, db ...DBLookup) (*EnrichedExpense, error) {
 	if categoryFK == "" || walletFK == "" {
 		return nil, fmt.Errorf("category_fk and wallet_fk are required")
 	}
@@ -208,6 +212,17 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 		}
 	}
 
+	var lookup DBLookup
+	if len(db) > 0 {
+		lookup = db[0]
+	}
+	var similar DBSimilarFields
+	if lookup != nil {
+		if sim, err := lookupSimilar(ctx, name, lookup); err == nil {
+			similar = sim
+		}
+	}
+
 	description := strings.TrimSpace(exp.Description)
 	mapping := memory.TransactionMappings{
 		TransactionPattern: description,
@@ -216,13 +231,15 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 		SubCategoryFK:      strPtrOrNil(subCategoryFK),
 		Income:             boolPtr(income),
 	}
+	fillNoSourceFields(&mapping, similar)
+
 	if description != "" {
 		if err := e.Memory.SaveTransactionMapping(ctx, mapping); err != nil {
 			return nil, fmt.Errorf("save transaction mapping: %w", err)
 		}
 	}
 
-	return e.buildExpense(exp, mapping, walletFK, DBSimilarFields{}), nil
+	return e.buildExpense(exp, mapping, walletFK, similar), nil
 }
 
 // resolveWallet resolves a bank account/card identifier and currency from the SMS to a wallet,

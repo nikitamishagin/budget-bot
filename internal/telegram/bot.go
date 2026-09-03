@@ -261,7 +261,17 @@ func (b *Bot) handleSubCategoryAnswer(ctx context.Context, chatID int64, state *
 		return
 	}
 
-	enriched, err := b.Enricher.ResolveWithUserInput(ctx, state.expense, state.name, state.categoryFK, subCategoryFK, walletFK, state.expense.Type == llmparser.TransactionIncome)
+	var dbLookups []handler.DBLookup
+	if path, ok := b.databases.get(chatID); ok {
+		if db, err := b.OpenDatabase(path); err == nil {
+			defer db.Close()
+			dbLookups = append(dbLookups, db)
+		} else {
+			log.Warn().Err(err).Int64("chat_id", chatID).Msg("failed to open database file for user input resolution lookup")
+		}
+	}
+
+	enriched, err := b.Enricher.ResolveWithUserInput(ctx, state.expense, state.name, state.categoryFK, subCategoryFK, walletFK, state.expense.Type == llmparser.TransactionIncome, dbLookups...)
 	if err != nil {
 		log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to resolve with user input")
 		b.reply(chatID, "Sorry, I could not save that. Please try again.")

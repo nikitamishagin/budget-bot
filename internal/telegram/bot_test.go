@@ -113,7 +113,7 @@ func (f *fakeEnricher) Enrich(_ context.Context, _ llmparser.Expense, _ ...handl
 	return f.result, f.err
 }
 
-func (f *fakeEnricher) ResolveWithUserInput(_ context.Context, _ llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool) (*handler.EnrichedExpense, error) {
+func (f *fakeEnricher) ResolveWithUserInput(_ context.Context, _ llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool, _ ...handler.DBLookup) (*handler.EnrichedExpense, error) {
 	f.resolveCalls++
 	f.resolveArgs = []string{name, categoryFK, subCategoryFK, walletFK}
 	return &handler.EnrichedExpense{Name: &name, CategoryFK: &categoryFK, WalletFK: &walletFK, Income: boolToInt64Ptr(income)}, nil

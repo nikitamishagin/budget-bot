@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode"
 )
 
 // Candidate is a distinct (name, category, wallet, income) combination already present in the
@@ -41,22 +43,51 @@ func (s *Store) FindExactMatch(ctx context.Context, description string) (Candida
 	return c, true, nil
 }
 
+func searchTokens(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
+	var tokens []string
+	for _, f := range fields {
+		if len(f) >= 3 {
+			tokens = append(tokens, f)
+		}
+	}
+	return tokens
+}
+
 // FindCandidates returns up to limit distinct enrichment combinations for transactions whose raw
-// SMS description (note) contains description as a case-insensitive substring, most
-// frequently used first. It never returns more than limit rows, so the SQLite file's contents are
-// never dumped wholesale to the caller (e.g., an LLM prompt).
+// SMS description (note) contains description as a case-insensitive substring or matches tokens,
+// most frequently used first. It never returns more than limit rows, so the SQLite file's contents
+// are never dumped wholesale to the caller (e.g., an LLM prompt).
 func (s *Store) FindCandidates(ctx context.Context, description string, limit int) ([]Candidate, error) {
 	if limit <= 0 {
 		limit = 5
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	trimmed := strings.TrimSpace(description)
+	whereClauses := []string{
+		"note = ? COLLATE NOCASE",
+		"(note != '' AND (note LIKE '%' || ? || '%' COLLATE NOCASE OR ? LIKE '%' || note || '%' COLLATE NOCASE))",
+	}
+	args := []any{trimmed, trimmed, trimmed}
+
+	for _, token := range searchTokens(trimmed) {
+		whereClauses = append(whereClauses, "note LIKE '%' || ? || '%' COLLATE NOCASE")
+		args = append(args, token)
+	}
+
+	query := fmt.Sprintf(`
 		SELECT name, category_fk, COALESCE(sub_category_fk, ''), wallet_fk, income, COUNT(*) AS c
 		FROM transactions
-		WHERE note LIKE '%' || ? || '%' COLLATE NOCASE
+		WHERE %s
 		GROUP BY name, category_fk, sub_category_fk, wallet_fk, income
 		ORDER BY c DESC
-		LIMIT ?`, description, limit)
+		LIMIT ?`, strings.Join(whereClauses, " OR "))
+
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("find candidates: %w", err)
 	}
@@ -107,18 +138,34 @@ type SimilarTransaction struct {
 }
 
 // FindSimilarTransaction returns the no-source enrichment fields of the most recent existing
-// transaction whose raw SMS description (note) matches description, so the agent
+// transaction whose name or raw SMS description (note) matches description, so the agent
 // can copy them instead of inventing defaults. ok is false when no such transaction exists.
 func (s *Store) FindSimilarTransaction(ctx context.Context, description string) (SimilarTransaction, bool, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT original_date_due, paired_transaction_fk, period_length, reoccurrence, end_date,
-		       upcoming_transaction_notification, type, paid, created_another_future_transaction,
-		       skip_paid, objective_fk, objective_loan_fk
+	trimmed := strings.TrimSpace(description)
+	whereClauses := []string{
+		"name = ? COLLATE NOCASE",
+		"note = ? COLLATE NOCASE",
+		"(note != '' AND (note LIKE '%' || ? || '%' COLLATE NOCASE OR ? LIKE '%' || note || '%' COLLATE NOCASE))",
+	}
+	args := []any{trimmed, trimmed, trimmed, trimmed}
+
+	for _, token := range searchTokens(trimmed) {
+		whereClauses = append(whereClauses, "note LIKE '%' || ? || '%' COLLATE NOCASE", "name LIKE '%' || ? || '%' COLLATE NOCASE")
+		args = append(args, token, token)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT NULLIF(original_date_due, ''), NULLIF(paired_transaction_fk, ''), NULLIF(period_length, ''),
+		       NULLIF(reoccurrence, ''), NULLIF(end_date, ''),
+		       NULLIF(upcoming_transaction_notification, ''), NULLIF(type, ''), NULLIF(paid, ''),
+		       NULLIF(created_another_future_transaction, ''), NULLIF(skip_paid, ''),
+		       NULLIF(objective_fk, ''), NULLIF(objective_loan_fk, '')
 		FROM transactions
-		WHERE note = ? COLLATE NOCASE
-		   OR note LIKE '%' || ? || '%' COLLATE NOCASE
+		WHERE %s
 		ORDER BY date_created DESC
-		LIMIT 1`, description, description)
+		LIMIT 1`, strings.Join(whereClauses, " OR "))
+
+	row := s.db.QueryRowContext(ctx, query, args...)
 
 	var (
 		originalDateDue, periodLength, reoccurrence, endDate       sql.NullInt64

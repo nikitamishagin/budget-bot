@@ -21,7 +21,7 @@ type ImageParser interface {
 // Enricher is the subset of *handler.Enricher the bot depends on.
 type Enricher interface {
 	Enrich(ctx context.Context, exp llmparser.Expense, db ...handler.DBLookup) (handler.Result, error)
-	ResolveWithUserInput(ctx context.Context, exp llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool) (*handler.EnrichedExpense, error)
+	ResolveWithUserInput(ctx context.Context, exp llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool, db ...handler.DBLookup) (*handler.EnrichedExpense, error)
 }
 
 // ExpenseWriter is the subset of *store.Store used to find fallback enrichment candidates and
