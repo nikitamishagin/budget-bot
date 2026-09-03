@@ -231,15 +231,12 @@ func newSQLiteFixture() *store.Store {
 }
 
 // newRealMemoryStore connects to the dedicated test Postgres database (see testDSN), migrates
-// it and truncates the memory tables so each test starts from a clean slate. It skips the test
-// (rather than failing it) when Postgres is not reachable, mirroring
-// internal/memory/store_test.go. Truncating is done through a separate pgxpool connection
-// (rather than through *memory.Store, which deliberately does not expose its pool) since only
-// tests should ever wipe this data.
+// it and truncates the memory tables so each test starts from a clean slate. It fail the test
+// when Postgres is not reachable.
 func newRealMemoryStore(ctx context.Context) *memory.Store {
 	mem, err := memory.New(ctx, testDSN())
 	if err != nil {
-		Skip(fmt.Sprintf("postgres not reachable, skipping: %v", err))
+		Fail(fmt.Sprintf("postgres not reachable: %v", err))
 	}
 	DeferCleanup(mem.Close)
 
