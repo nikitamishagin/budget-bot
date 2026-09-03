@@ -76,49 +76,30 @@ func testDSN() string {
 	return cfg.DSN()
 }
 
-// flexString unmarshals a JSON field that testdata/answers.json stores inconsistently as either
-// a string or a number (its "category_fk" field, since a real Cashew "category_fk" can be either
-// a numeric built-in category id or a UUID string), always as a plain string.
-type flexString string
-
-func (f *flexString) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); err == nil {
-		*f = flexString(s)
-		return nil
-	}
-	var n json.Number
-	if err := json.Unmarshal(data, &n); err != nil {
-		return fmt.Errorf("category_fk is neither a string nor a number: %s", data)
-	}
-	*f = flexString(n.String())
-	return nil
-}
-
 // answerExpense mirrors one entry of testdata/answers.json, using the same field names/types as
 // handler.EnrichedExpense wherever possible, so assertMatchesAnswer can compare them directly.
 type answerExpense struct {
-	PairedTransactionFK             *string    `json:"paired_transaction_fk"`
-	Name                            *string    `json:"name"`
-	Amount                          float64    `json:"amount"`
-	Note                            string     `json:"note"`
-	CategoryFK                      flexString `json:"category_fk"`
-	SubCategoryFK                   *string    `json:"sub_category_fk"`
-	WalletFK                        string     `json:"wallet_fk"`
-	DateCreated                     int64      `json:"date_created"`
-	DateTimeModified                int64      `json:"date_time_modified"`
-	OriginalDateDue                 *int64     `json:"original_date_due"`
-	Income                          int64      `json:"income"`
-	PeriodLength                    *int64     `json:"period_length"`
-	Reoccurrence                    *int64     `json:"reoccurrence"`
-	EndDate                         *int64     `json:"end_date"`
-	UpcomingTransactionNotification *int64     `json:"upcoming_transaction_notification"`
-	Type                            *int64     `json:"type"`
-	Paid                            *int64     `json:"paid"`
-	CreatedAnotherFutureTransaction *int64     `json:"created_another_future_transaction"`
-	SkipPaid                        *int64     `json:"skip_paid"`
-	ObjectiveFK                     *string    `json:"objective_fk"`
-	ObjectiveLoanFK                 *string    `json:"objective_loan_fk"`
+	PairedTransactionFK             *string `json:"paired_transaction_fk"`
+	Name                            *string `json:"name"`
+	Amount                          float64 `json:"amount"`
+	Note                            string  `json:"note"`
+	CategoryFK                      string  `json:"category_fk"`
+	SubCategoryFK                   *string `json:"sub_category_fk"`
+	WalletFK                        string  `json:"wallet_fk"`
+	DateCreated                     int64   `json:"date_created"`
+	DateTimeModified                int64   `json:"date_time_modified"`
+	OriginalDateDue                 *int64  `json:"original_date_due"`
+	Income                          int64   `json:"income"`
+	PeriodLength                    *int64  `json:"period_length"`
+	Reoccurrence                    *int64  `json:"reoccurrence"`
+	EndDate                         *int64  `json:"end_date"`
+	UpcomingTransactionNotification *int64  `json:"upcoming_transaction_notification"`
+	Type                            *int64  `json:"type"`
+	Paid                            *int64  `json:"paid"`
+	CreatedAnotherFutureTransaction *int64  `json:"created_another_future_transaction"`
+	SkipPaid                        *int64  `json:"skip_paid"`
+	ObjectiveFK                     *string `json:"objective_fk"`
+	ObjectiveLoanFK                 *string `json:"objective_loan_fk"`
 }
 
 // answers mirrors the top-level shape of testdata/answers.json: one section per Enricher outcome.
