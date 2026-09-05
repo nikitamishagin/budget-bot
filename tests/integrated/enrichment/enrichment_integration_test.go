@@ -343,7 +343,10 @@ func newRealLLMResolver(ctx context.Context) *llmparser.Client {
 	}
 	pingCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if _, err := client.ResolveDescription(pingCtx, llmparser.Expense{Description: "ping"}, nil); err != nil {
+	candidates := []llmparser.Candidate{
+		{Name: "ping", CategoryFK: "ping_cat", WalletFK: "ping_wallet"},
+	}
+	if _, err := client.ResolveDescription(pingCtx, llmparser.Expense{Description: "ping"}, candidates); err != nil {
 		Fail(fmt.Sprintf("llm server not reachable, cannot exercise the real LLM path: %v", err))
 	}
 	return client
