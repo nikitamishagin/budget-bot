@@ -63,6 +63,7 @@ var rootCmd = &cobra.Command{
 			time.Duration(cfg.LLM.TimeoutSeconds)*time.Second,
 			cfg.LLM.MaxTokensParse,
 			cfg.LLM.MaxTokensResolve,
+			cfg.LLM.ReasoningEffort,
 		)
 
 		ctx, cancel := context.WithCancel(context.Background())

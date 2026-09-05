@@ -332,6 +332,7 @@ func newRealLLMResolver(ctx context.Context) *llmparser.Client {
 		time.Duration(cfg.LLM.TimeoutSeconds)*time.Second,
 		cfg.LLM.MaxTokensParse,
 		cfg.LLM.MaxTokensResolve,
+		cfg.LLM.ReasoningEffort,
 	)
 
 	// A short resolution call is enough to confirm the server is actually reachable before

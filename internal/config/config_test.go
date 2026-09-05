@@ -29,6 +29,7 @@ llm:
   api_key_file: "./api-key"
   model: "test-model"
   timeout_seconds: 30
+  reasoning_effort: "high"
 log:
   level: "debug"
 `), 0o600)).To(Succeed())
@@ -39,6 +40,7 @@ log:
 		Expect(cfg.LLM.BaseURL).To(Equal("http://127.0.0.1:8080/v1"))
 		Expect(cfg.LLM.Model).To(Equal("test-model"))
 		Expect(cfg.LLM.TimeoutSeconds).To(Equal(30))
+		Expect(cfg.LLM.ReasoningEffort).To(Equal("high"))
 		Expect(cfg.Log.Level).To(Equal("debug"))
 	})
 
@@ -51,6 +53,7 @@ log:
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg.LLM.BaseURL).To(Equal("http://127.0.0.1:8080/v1"))
 		Expect(cfg.LLM.TimeoutSeconds).To(Equal(120))
+		Expect(cfg.LLM.ReasoningEffort).To(Equal("medium"))
 	})
 
 	It("returns an error when the file does not exist", func() {

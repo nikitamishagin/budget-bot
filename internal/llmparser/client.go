@@ -35,13 +35,14 @@ type Client struct {
 	httpClient       *http.Client
 	maxTokensParse   int
 	maxTokensResolve int
+	reasoningEffort  string
 }
 
 // NewClient creates a Client for the given base URL (e.g. "http://127.0.0.1:8080/v1"),
 // API key, model name, and request timeout. maxTokensParse/maxTokensResolve cap the number of
 // generated tokens for image parsing and description resolution requests respectively; a value <= 0
 // falls back to a sane default.
-func NewClient(baseURL, apiKey, model string, timeout time.Duration, maxTokensParse, maxTokensResolve int) *Client {
+func NewClient(baseURL, apiKey, model string, timeout time.Duration, maxTokensParse, maxTokensResolve int, reasoningEffort string) *Client {
 	if maxTokensParse <= 0 {
 		maxTokensParse = defaultMaxTokensParse
 	}
@@ -57,6 +58,7 @@ func NewClient(baseURL, apiKey, model string, timeout time.Duration, maxTokensPa
 		},
 		maxTokensParse:   maxTokensParse,
 		maxTokensResolve: maxTokensResolve,
+		reasoningEffort:  reasoningEffort,
 	}
 }
 
@@ -97,6 +99,8 @@ type chatRequest struct {
 	// ChatTemplateKwargs disables Qwen3's hybrid "thinking" mode for these single-shot
 	// classification/extraction tasks.
 	ChatTemplateKwargs *chatTemplateKwargs `json:"chat_template_kwargs,omitempty"`
+	// ReasoningEffort specifies the level of effort or complexity expected for reasoning in a chat request.
+	ReasoningEffort string `json:"reasoning_effort"`
 }
 
 type responseFormat struct {
@@ -108,7 +112,9 @@ type chatTemplateKwargs struct {
 }
 
 var jsonResponseFormat = &responseFormat{Type: "json_object"}
-var thinkingOff = &chatTemplateKwargs{EnableThinking: false}
+var thinking = &chatTemplateKwargs{
+	EnableThinking: true,
+}
 
 type chatResponse struct {
 	Choices []struct {
@@ -157,7 +163,8 @@ func (c *Client) ParseImageBytes(ctx context.Context, imageData []byte, mimeType
 		MaxTokens:          c.maxTokensParse,
 		TopK:               1,
 		ResponseFormat:     jsonResponseFormat,
-		ChatTemplateKwargs: thinkingOff,
+		ChatTemplateKwargs: thinking,
+		ReasoningEffort:    c.reasoningEffort,
 	}
 
 	content, err := c.chatCompletion(ctx, reqBody)

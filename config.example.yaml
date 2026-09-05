@@ -3,6 +3,7 @@ llm:
   api_key_file: "./api-key"
   model: "config_qwen35-9b-nvfp4"
   timeout_seconds: 120
+  reasoning_effort: "medium"
   max_tokens_parse: 4096
   max_tokens_resolve: 512
 

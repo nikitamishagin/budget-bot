@@ -69,6 +69,7 @@ var _ = Describe("Client.ParseImage against a real LLM server", func() {
 			time.Duration(cfg.LLM.TimeoutSeconds)*time.Second,
 			cfg.LLM.MaxTokensParse,
 			cfg.LLM.MaxTokensResolve,
+			cfg.LLM.ReasoningEffort,
 		)
 
 		cases = loadScreenshotCases("answers.json")

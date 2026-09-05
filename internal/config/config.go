@@ -10,10 +10,11 @@ import (
 
 // LLMConfig holds settings required to talk to the local LLM inference server.
 type LLMConfig struct {
-	BaseURL        string `mapstructure:"base_url"`
-	APIKeyFile     string `mapstructure:"api_key_file"`
-	Model          string `mapstructure:"model"`
-	TimeoutSeconds int    `mapstructure:"timeout_seconds"`
+	BaseURL         string `mapstructure:"base_url"`
+	APIKeyFile      string `mapstructure:"api_key_file"`
+	Model           string `mapstructure:"model"`
+	TimeoutSeconds  int    `mapstructure:"timeout_seconds"`
+	ReasoningEffort string `mapstructure:"reasoning_effort"`
 	// MaxTokensParse/MaxTokensResolve cap generation length for image-parsing and description-resolution
 	// requests respectively, so a misconfigured stop token can never hold the GPU forever.
 	MaxTokensParse   int `mapstructure:"max_tokens_parse"`
@@ -65,6 +66,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("llm.api_key_file", "./api-key")
 	v.SetDefault("llm.model", "config_qwen35-9b-nvfp4")
 	v.SetDefault("llm.timeout_seconds", 120)
+	v.SetDefault("llm.reasoning_effort", "medium")
 	v.SetDefault("llm.max_tokens_parse", 4096)
 	v.SetDefault("llm.max_tokens_resolve", 512)
 	v.SetDefault("log.level", "info")

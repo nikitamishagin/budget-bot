@@ -69,7 +69,8 @@ func (c *Client) ResolveDescription(ctx context.Context, expense Expense, candid
 		MaxTokens:          c.maxTokensResolve,
 		TopK:               1,
 		ResponseFormat:     jsonResponseFormat,
-		ChatTemplateKwargs: thinkingOff,
+		ChatTemplateKwargs: thinking,
+		ReasoningEffort:    c.reasoningEffort,
 	}
 
 	content, err := c.chatCompletion(ctx, reqBody)
