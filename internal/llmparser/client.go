@@ -113,7 +113,7 @@ type chatTemplateKwargs struct {
 
 var jsonResponseFormat = &responseFormat{Type: "json_object"}
 var thinking = &chatTemplateKwargs{
-	EnableThinking: true,
+	EnableThinking: false,
 }
 
 type chatResponse struct {
