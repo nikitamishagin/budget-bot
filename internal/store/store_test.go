@@ -23,7 +23,7 @@ func TestStore(t *testing.T) {
 
 const testSchema = `
 CREATE TABLE wallets ("wallet_pk" TEXT NOT NULL, "name" TEXT NOT NULL, PRIMARY KEY ("wallet_pk"));
-CREATE TABLE categories ("category_pk" TEXT NOT NULL, "name" TEXT NOT NULL, PRIMARY KEY ("category_pk"));
+CREATE TABLE categories ("category_pk" TEXT NOT NULL, "name" TEXT NOT NULL, "main_category_pk" TEXT NULL, PRIMARY KEY ("category_pk"));
 CREATE TABLE transactions (
 	"transaction_pk" TEXT NOT NULL,
 	"paired_transaction_fk" TEXT NULL,
@@ -304,5 +304,127 @@ var _ = Describe("Insert", func() {
 		result, err := s.Insert(context.Background(), exp)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Duplicate).To(BeFalse())
+	})
+})
+
+var _ = Describe("ResolveCategory and ResolveWallet", func() {
+	It("resolves category by name (case-insensitive) and by category_pk", func() {
+		s, _ := newTestDB(
+			`INSERT INTO categories (category_pk, name, main_category_pk) VALUES ('cat-food', 'Food & Dining', NULL)`,
+		)
+		defer s.Close()
+
+		ctx := context.Background()
+
+		// Lookup by name (exact case)
+		pk, isSub, ok, err := s.ResolveCategory(ctx, "Food & Dining")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(pk).To(Equal("cat-food"))
+		Expect(isSub).To(BeFalse())
+
+		// Lookup by name (case-insensitive)
+		pk, isSub, ok, err = s.ResolveCategory(ctx, "food & dining")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(pk).To(Equal("cat-food"))
+		Expect(isSub).To(BeFalse())
+
+		// Lookup by category_pk
+		pk, isSub, ok, err = s.ResolveCategory(ctx, "cat-food")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(pk).To(Equal("cat-food"))
+		Expect(isSub).To(BeFalse())
+	})
+
+	It("resolves subcategory by name and verifies isSubcategory is true", func() {
+		s, _ := newTestDB(
+			`INSERT INTO categories (category_pk, name, main_category_pk) VALUES ('cat-food', 'Food & Dining', NULL)`,
+			`INSERT INTO categories (category_pk, name, main_category_pk) VALUES ('sub-coffee', 'Coffee Shops', 'cat-food')`,
+		)
+		defer s.Close()
+
+		ctx := context.Background()
+
+		pk, isSub, ok, err := s.ResolveCategory(ctx, "Coffee Shops")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(pk).To(Equal("sub-coffee"))
+		Expect(isSub).To(BeTrue())
+
+		// Also case-insensitive
+		pk, isSub, ok, err = s.ResolveCategory(ctx, "coffee shops")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(pk).To(Equal("sub-coffee"))
+		Expect(isSub).To(BeTrue())
+	})
+
+	It("returns found=false for non-existent category or empty input", func() {
+		s, _ := newTestDB(
+			`INSERT INTO categories (category_pk, name, main_category_pk) VALUES ('cat-food', 'Food & Dining', NULL)`,
+		)
+		defer s.Close()
+
+		ctx := context.Background()
+
+		pk, isSub, ok, err := s.ResolveCategory(ctx, "Non-existent Category")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeFalse())
+		Expect(pk).To(BeEmpty())
+		Expect(isSub).To(BeFalse())
+
+		pk, isSub, ok, err = s.ResolveCategory(ctx, "   ")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeFalse())
+		Expect(pk).To(BeEmpty())
+		Expect(isSub).To(BeFalse())
+	})
+
+	It("resolves wallet by name (case-insensitive) and by wallet_pk", func() {
+		s, _ := newTestDB(
+			`INSERT INTO wallets (wallet_pk, name) VALUES ('wallet-main', 'Checking Account')`,
+		)
+		defer s.Close()
+
+		ctx := context.Background()
+
+		// Lookup by name (exact case)
+		pk, ok, err := s.ResolveWallet(ctx, "Checking Account")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(pk).To(Equal("wallet-main"))
+
+		// Lookup by name (case-insensitive)
+		pk, ok, err = s.ResolveWallet(ctx, "checking account")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(pk).To(Equal("wallet-main"))
+
+		// Lookup by wallet_pk
+		pk, ok, err = s.ResolveWallet(ctx, "wallet-main")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(pk).To(Equal("wallet-main"))
+	})
+
+	It("returns found=false for non-existent wallet or empty input", func() {
+		s, _ := newTestDB(
+			`INSERT INTO wallets (wallet_pk, name) VALUES ('wallet-main', 'Checking Account')`,
+		)
+		defer s.Close()
+
+		ctx := context.Background()
+
+		pk, ok, err := s.ResolveWallet(ctx, "Unknown Wallet")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeFalse())
+		Expect(pk).To(BeEmpty())
+
+		pk, ok, err = s.ResolveWallet(ctx, "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeFalse())
+		Expect(pk).To(BeEmpty())
 	})
 })

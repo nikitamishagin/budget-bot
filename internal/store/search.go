@@ -199,6 +199,61 @@ func (s *Store) FindSimilarTransaction(ctx context.Context, description string) 
 	}, true, nil
 }
 
+// ResolveCategory looks up a category by case-insensitive name or category_pk.
+// It returns categoryPK, whether the category is a subcategory (main_category_pk IS NOT NULL AND main_category_pk != ”),
+// found=true, and nil error on match. If input is empty/whitespace or no match is found, it returns "", false, false, nil.
+func (s *Store) ResolveCategory(ctx context.Context, input string) (categoryPK string, isSubcategory bool, found bool, err error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "", false, false, nil
+	}
+
+	query := `
+		SELECT category_pk, CASE WHEN main_category_pk IS NOT NULL AND main_category_pk != '' THEN 1 ELSE 0 END
+		FROM categories
+		WHERE name = ? COLLATE NOCASE OR category_pk = ?
+		ORDER BY CASE WHEN name = ? COLLATE NOCASE THEN 0 ELSE 1 END
+		LIMIT 1`
+
+	var isSub int
+	err = s.db.QueryRowContext(ctx, query, trimmed, trimmed, trimmed).Scan(&categoryPK, &isSub)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, false, nil
+		}
+		return "", false, false, fmt.Errorf("resolve category: %w", err)
+	}
+
+	return categoryPK, isSub == 1, true, nil
+}
+
+// ResolveWallet looks up a wallet by case-insensitive name or wallet_pk.
+// It returns walletPK, found=true, and nil error on match.
+// If input is empty/whitespace or no match is found, it returns "", false, nil.
+func (s *Store) ResolveWallet(ctx context.Context, input string) (walletPK string, found bool, err error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "", false, nil
+	}
+
+	query := `
+		SELECT wallet_pk
+		FROM wallets
+		WHERE name = ? COLLATE NOCASE OR wallet_pk = ?
+		ORDER BY CASE WHEN name = ? COLLATE NOCASE THEN 0 ELSE 1 END
+		LIMIT 1`
+
+	err = s.db.QueryRowContext(ctx, query, trimmed, trimmed, trimmed).Scan(&walletPK)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("resolve wallet: %w", err)
+	}
+
+	return walletPK, true, nil
+}
+
 // nullInt64Ptr converts a sql.NullInt64 into a *int64, nil when the column was NULL.
 func nullInt64Ptr(v sql.NullInt64) *int64 {
 	if !v.Valid {

@@ -71,10 +71,26 @@ func newTestBot(sender Sender, parser ImageParser, enricher Enricher, accounts A
 
 // fakeWriter is a stub ExpenseWriter for tests, so bot tests never need a real SQLite file.
 type fakeWriter struct {
-	inserted []handler.EnrichedExpense
+	inserted   []handler.EnrichedExpense
+	categories map[string]string // input -> categoryPK
+	subcats    map[string]bool   // input -> isSubcategory
+	wallets    map[string]string // input -> walletPK
 }
 
-func newFakeWriter() *fakeWriter { return &fakeWriter{} }
+func newFakeWriter() *fakeWriter {
+	return &fakeWriter{
+		categories: map[string]string{
+			"cat-groceries": "cat-groceries",
+			"cat-coffee":    "cat-coffee",
+			"cat-x":         "cat-x",
+		},
+		subcats: map[string]bool{},
+		wallets: map[string]string{
+			"wallet-main": "wallet-main",
+			"wallet-1":    "wallet-1",
+		},
+	}
+}
 
 func (f *fakeWriter) FindCandidates(_ context.Context, _ string, _ int) ([]handler.DBCandidate, error) {
 	return nil, nil
@@ -82,6 +98,20 @@ func (f *fakeWriter) FindCandidates(_ context.Context, _ string, _ int) ([]handl
 
 func (f *fakeWriter) FindSimilar(_ context.Context, _ string) (handler.DBSimilarFields, bool, error) {
 	return handler.DBSimilarFields{}, false, nil
+}
+
+func (f *fakeWriter) ResolveCategory(_ context.Context, input string) (string, bool, bool, error) {
+	if pk, ok := f.categories[input]; ok {
+		return pk, f.subcats[input], true, nil
+	}
+	return "", false, false, nil
+}
+
+func (f *fakeWriter) ResolveWallet(_ context.Context, input string) (string, bool, error) {
+	if pk, ok := f.wallets[input]; ok {
+		return pk, true, nil
+	}
+	return "", false, nil
 }
 
 func (f *fakeWriter) Insert(_ context.Context, exp handler.EnrichedExpense) (store.InsertResult, error) {
@@ -361,6 +391,88 @@ var _ = Describe("Bot.HandleText", func() {
 		Expect(writer.inserted).To(HaveLen(1))
 		Expect(writer.inserted[0].CategoryFK).To(HaveValue(Equal("cat-coffee")))
 		Expect(sender.sentDocs).To(Equal(1))
+	})
+
+	It("resolves wallet and category names to PKs during user answering and editing", func() {
+		sender := &fakeSender{}
+		writer := newFakeWriter()
+		writer.wallets["My Card"] = "wallet-pk-123"
+		writer.categories["Food & Dining"] = "cat-pk-456"
+		writer.categories["Groceries"] = "subcat-pk-789"
+		writer.subcats["Groceries"] = true
+
+		accounts := newFakeAccounts()
+		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "Which wallet does account \"9999\" belong to?"}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Supermarket", Account: "9999", Currency: "USD"}}}
+		bot := newTestBot(sender, parser, enricher, accounts, []string{"alice"})
+		bot.OpenDatabase = func(string) (ExpenseWriter, error) { return writer, nil }
+
+		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+		bot.HandleParse(context.Background(), 1)
+
+		// 1. Wallet answer with unknown wallet name -> retries
+		bot.HandleText(context.Background(), 1, "Unknown Wallet")
+		Expect(sender.last()).To(ContainSubstring("Wallet not found in database. Please enter a valid wallet name:"))
+
+		// Wallet answer with valid wallet name -> resolves to wallet_pk-123
+		enricher.result = handler.Result{NeedsUserInput: true, Question: "What is the name of the \"Supermarket\" expense?"}
+		bot.HandleText(context.Background(), 1, "My Card")
+		Expect(accounts.wallets["9999|USD"].WalletFK).To(Equal("wallet-pk-123"))
+		Expect(accounts.wallets["9999|USD"].Name).To(Equal("My Card"))
+
+		// 2. Name answer
+		bot.HandleText(context.Background(), 1, "Supermarket Title")
+		Expect(sender.last()).To(ContainSubstring("category"))
+
+		// 3. Category answer with unknown category -> asks to retry and doesn't advance state
+		bot.HandleText(context.Background(), 1, "Unknown Category")
+		Expect(sender.last()).To(ContainSubstring("Category not found in database. Please enter a valid category name:"))
+
+		// Category answer with valid category name -> resolves to cat-pk-456 and asks subcategory
+		bot.HandleText(context.Background(), 1, "Food & Dining")
+		Expect(sender.last()).To(ContainSubstring("subcategory"))
+
+		// 4. Subcategory answer with unknown subcategory -> asks to retry and doesn't advance state
+		bot.HandleText(context.Background(), 1, "Unknown Subcategory")
+		Expect(sender.last()).To(ContainSubstring("Subcategory not found in database. Please enter a valid subcategory name (or \"-\" to skip):"))
+
+		// Subcategory answer with valid subcategory name -> resolves to subcat-pk-789
+		bot.HandleText(context.Background(), 1, "Groceries")
+		Expect(enricher.resolveCalls).To(Equal(1))
+		Expect(enricher.resolveArgs[0]).To(Equal("Supermarket Title"))
+		Expect(enricher.resolveArgs[1]).To(Equal("cat-pk-456"))
+		Expect(enricher.resolveArgs[2]).To(Equal("subcat-pk-789"))
+		Expect(enricher.resolveArgs[3]).To(Equal("wallet-pk-123"))
+		Expect(sender.last()).To(ContainSubstring("Save these transactions?"))
+
+		// 5. Edit commands resolve names to PKs, and reject unknown names
+		bot.HandleText(context.Background(), 1, "no")
+		Expect(sender.last()).To(ContainSubstring("unapproved data"))
+
+		// Edit category with unknown name
+		bot.HandleText(context.Background(), 1, "edit 1 category NonExistent")
+		Expect(sender.last()).To(Equal("Category not found in database. Please specify an existing category."))
+
+		// Edit category with valid name
+		writer.categories["Transport"] = "cat-pk-transport"
+		bot.HandleText(context.Background(), 1, "edit 1 category Transport")
+		Expect(sender.last()).To(ContainSubstring("Updated."))
+		Expect(sender.last()).To(ContainSubstring("cat-pk-transport"))
+
+		// Edit wallet with unknown name
+		bot.HandleText(context.Background(), 1, "edit 1 wallet NonExistent")
+		Expect(sender.last()).To(Equal("Wallet not found in database. Please specify an existing wallet."))
+
+		// Edit wallet with valid name
+		writer.wallets["Cash"] = "wallet-pk-cash"
+		bot.HandleText(context.Background(), 1, "edit 1 wallet Cash")
+		Expect(sender.last()).To(ContainSubstring("Updated."))
+		Expect(sender.last()).To(ContainSubstring("wallet-pk-cash"))
+
+		// Edit name
+		bot.HandleText(context.Background(), 1, "edit 1 name New Name")
+		Expect(sender.last()).To(ContainSubstring("Updated."))
+		Expect(sender.last()).To(ContainSubstring("New Name"))
 	})
 
 	It("discards a rejected batch entirely on request", func() {

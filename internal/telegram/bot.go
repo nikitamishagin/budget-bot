@@ -195,7 +195,7 @@ func (b *Bot) HandleText(ctx context.Context, chatID int64, text string) {
 	case pendingName:
 		b.handleNameAnswer(chatID, state, text)
 	case pendingCategory:
-		b.handleCategoryAnswer(chatID, state, text)
+		b.handleCategoryAnswer(ctx, chatID, state, text)
 	case pendingSubCategory:
 		b.handleSubCategoryAnswer(ctx, chatID, state, text)
 	case pendingApproval:
@@ -205,13 +205,36 @@ func (b *Bot) HandleText(ctx context.Context, chatID int64, text string) {
 	}
 }
 
-func (b *Bot) handleWalletAnswer(ctx context.Context, chatID int64, state *pendingState, walletFK string) {
+func (b *Bot) openDB(chatID int64) (ExpenseWriter, error) {
+	path, ok := b.databases.get(chatID)
+	if !ok {
+		return nil, fmt.Errorf("no database file on file for this chat")
+	}
+	return b.OpenDatabase(path)
+}
+
+func (b *Bot) handleWalletAnswer(ctx context.Context, chatID int64, state *pendingState, text string) {
+	db, err := b.openDB(chatID)
+	if err != nil {
+		log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to open database for wallet resolution")
+		b.reply(chatID, "Sorry, I could not access your database. Please try again.")
+		return
+	}
+	defer db.Close()
+
+	resolvedWalletPK, found, err := db.ResolveWallet(ctx, text)
+	if err != nil || !found {
+		b.reply(chatID, "Wallet not found in database. Please enter a valid wallet name:")
+		return
+	}
+
 	account := strings.TrimSpace(state.expense.Account)
-	if account != "" {
+	if account != "" && b.Accounts != nil {
 		if err := b.Accounts.SaveWalletMapping(ctx, memory.WalletMappings{
 			AccountPattern: account,
+			Name:           text,
 			Currency:       state.expense.Currency,
-			WalletFK:       walletFK,
+			WalletFK:       resolvedWalletPK,
 		}); err != nil {
 			log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to save account mapping")
 			b.reply(chatID, "Sorry, I could not save that. Please try again.")
@@ -235,8 +258,22 @@ func (b *Bot) handleNameAnswer(chatID int64, state *pendingState, name string) {
 
 // handleCategoryAnswer records the user-supplied category and moves on to asking for the
 // (optional) subcategory.
-func (b *Bot) handleCategoryAnswer(chatID int64, state *pendingState, categoryFK string) {
-	state.categoryFK = categoryFK
+func (b *Bot) handleCategoryAnswer(ctx context.Context, chatID int64, state *pendingState, text string) {
+	db, err := b.openDB(chatID)
+	if err != nil {
+		log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to open database for category resolution")
+		b.reply(chatID, "Sorry, I could not access your database. Please try again.")
+		return
+	}
+	defer db.Close()
+
+	resolvedCategoryPK, _, found, err := db.ResolveCategory(ctx, text)
+	if err != nil || !found {
+		b.reply(chatID, "Category not found in database. Please enter a valid category name:")
+		return
+	}
+
+	state.categoryFK = resolvedCategoryPK
 	state.kind = pendingSubCategory
 	b.sessions.set(chatID, state)
 	b.reply(chatID, handler.SubCategoryQuestion(state.expense.Description))
@@ -244,9 +281,23 @@ func (b *Bot) handleCategoryAnswer(chatID int64, state *pendingState, categoryFK
 
 // handleSubCategoryAnswer records the (optional) subcategory answer - "-" leaves it empty - and
 // resolves the fully-answered expense (name, category, subcategory, wallet) into the batch.
-func (b *Bot) handleSubCategoryAnswer(ctx context.Context, chatID int64, state *pendingState, subCategoryFK string) {
-	if subCategoryFK == "-" {
-		subCategoryFK = ""
+func (b *Bot) handleSubCategoryAnswer(ctx context.Context, chatID int64, state *pendingState, text string) {
+	var subCategoryFK string
+	if text != "-" && text != "" {
+		db, err := b.openDB(chatID)
+		if err != nil {
+			log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to open database for subcategory resolution")
+			b.reply(chatID, "Sorry, I could not access your database. Please try again.")
+			return
+		}
+		defer db.Close()
+
+		resolvedSubCategoryPK, _, found, err := db.ResolveCategory(ctx, text)
+		if err != nil || !found {
+			b.reply(chatID, "Subcategory not found in database. Please enter a valid subcategory name (or \"-\" to skip):")
+			return
+		}
+		subCategoryFK = resolvedSubCategoryPK
 	}
 
 	walletFK := ""
@@ -328,7 +379,7 @@ func (b *Bot) handleEditingAnswer(ctx context.Context, chatID int64, state *pend
 		b.sessions.clear(chatID)
 		b.reply(chatID, "Discarded.")
 	case strings.HasPrefix(strings.ToLower(answer), "edit "):
-		b.applyEdit(chatID, state, answer)
+		b.applyEdit(ctx, chatID, state, answer)
 	default:
 		b.reply(chatID, "Reply with \"edit <number> category|wallet|name <value>\", \"approve\", or \"discard\".")
 	}
@@ -336,7 +387,7 @@ func (b *Bot) handleEditingAnswer(ctx context.Context, chatID int64, state *pend
 
 // applyEdit parses an "edit <number> <field> <value>" command and updates the matching entry of
 // the chat's unapproved batch in place.
-func (b *Bot) applyEdit(chatID int64, state *pendingState, command string) {
+func (b *Bot) applyEdit(ctx context.Context, chatID int64, state *pendingState, command string) {
 	parts := strings.SplitN(command, " ", 4)
 	if len(parts) != 4 {
 		b.reply(chatID, "Please use the format: \"edit <number> category|wallet|name <value>\".")
@@ -352,9 +403,35 @@ func (b *Bot) applyEdit(chatID int64, state *pendingState, command string) {
 	entry := state.batch[index-1]
 	switch field {
 	case "category":
-		entry.CategoryFK = &value
+		db, err := b.openDB(chatID)
+		if err != nil {
+			log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to open database for category edit")
+			b.reply(chatID, "Sorry, I could not access your database. Please try again.")
+			return
+		}
+		defer db.Close()
+
+		resolvedCategoryPK, _, found, err := db.ResolveCategory(ctx, value)
+		if err != nil || !found {
+			b.reply(chatID, "Category not found in database. Please specify an existing category.")
+			return
+		}
+		entry.CategoryFK = &resolvedCategoryPK
 	case "wallet":
-		entry.WalletFK = &value
+		db, err := b.openDB(chatID)
+		if err != nil {
+			log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to open database for wallet edit")
+			b.reply(chatID, "Sorry, I could not access your database. Please try again.")
+			return
+		}
+		defer db.Close()
+
+		resolvedWalletPK, found, err := db.ResolveWallet(ctx, value)
+		if err != nil || !found {
+			b.reply(chatID, "Wallet not found in database. Please specify an existing wallet.")
+			return
+		}
+		entry.WalletFK = &resolvedWalletPK
 	case "name":
 		entry.Name = &value
 	default:

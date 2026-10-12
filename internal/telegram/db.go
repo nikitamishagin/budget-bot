@@ -67,6 +67,14 @@ func (a *storeAdapter) FindSimilar(ctx context.Context, description string) (han
 	}, true, nil
 }
 
+func (a *storeAdapter) ResolveCategory(ctx context.Context, input string) (categoryPK string, isSubcategory bool, found bool, err error) {
+	return a.store.ResolveCategory(ctx, input)
+}
+
+func (a *storeAdapter) ResolveWallet(ctx context.Context, input string) (walletPK string, found bool, err error) {
+	return a.store.ResolveWallet(ctx, input)
+}
+
 func (a *storeAdapter) Insert(ctx context.Context, exp handler.EnrichedExpense) (store.InsertResult, error) {
 	return a.store.Insert(ctx, exp)
 }
