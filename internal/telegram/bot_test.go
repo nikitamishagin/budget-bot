@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -82,6 +83,8 @@ func newFakeWriter() *fakeWriter {
 		categories: map[string]string{
 			"cat-groceries": "cat-groceries",
 			"cat-coffee":    "cat-coffee",
+			"cat-food":      "cat-food",
+			"cat-wrong":     "cat-wrong",
 			"cat-x":         "cat-x",
 		},
 		subcats: map[string]bool{},
@@ -110,6 +113,24 @@ func (f *fakeWriter) ResolveCategory(_ context.Context, input string) (string, b
 func (f *fakeWriter) ResolveWallet(_ context.Context, input string) (string, bool, error) {
 	if pk, ok := f.wallets[input]; ok {
 		return pk, true, nil
+	}
+	return "", false, nil
+}
+
+func (f *fakeWriter) CategoryName(_ context.Context, pk string) (string, bool, error) {
+	for name, v := range f.categories {
+		if v == pk {
+			return name, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (f *fakeWriter) WalletName(_ context.Context, pk string) (string, bool, error) {
+	for name, v := range f.wallets {
+		if v == pk {
+			return name, true, nil
+		}
 	}
 	return "", false, nil
 }
@@ -457,7 +478,7 @@ var _ = Describe("Bot.HandleText", func() {
 		writer.categories["Transport"] = "cat-pk-transport"
 		bot.HandleText(context.Background(), 1, "edit 1 category Transport")
 		Expect(sender.last()).To(ContainSubstring("Updated."))
-		Expect(sender.last()).To(ContainSubstring("cat-pk-transport"))
+		Expect(sender.last()).To(ContainSubstring("Category: Transport"))
 
 		// Edit wallet with unknown name
 		bot.HandleText(context.Background(), 1, "edit 1 wallet NonExistent")
@@ -467,7 +488,7 @@ var _ = Describe("Bot.HandleText", func() {
 		writer.wallets["Cash"] = "wallet-pk-cash"
 		bot.HandleText(context.Background(), 1, "edit 1 wallet Cash")
 		Expect(sender.last()).To(ContainSubstring("Updated."))
-		Expect(sender.last()).To(ContainSubstring("wallet-pk-cash"))
+		Expect(sender.last()).To(ContainSubstring("Wallet: Cash"))
 
 		// Edit name
 		bot.HandleText(context.Background(), 1, "edit 1 name New Name")
@@ -557,3 +578,54 @@ var _ = Describe("Bot approval saving", func() {
 type assertError struct{}
 
 func (assertError) Error() string { return "boom" }
+
+var _ = Describe("formatEnrichedExpense", func() {
+	s := func(v string) *string { return &v }
+	date := time.Unix(1787311140, 0).Format("2006-01-02 15:04")
+
+	It("shows names and a readable date", func() {
+		writer := newFakeWriter()
+		writer.categories["Food"] = "c1"
+		writer.categories["Cafe"] = "c2"
+		writer.wallets["Cash"] = "w1"
+		e := &handler.EnrichedExpense{Name: s("Coffee"), Amount: -3, CategoryFK: s("c1"), SubCategoryFK: s("c2"), WalletFK: s("w1"), DateCreated: 1787311140}
+		out, err := formatEnrichedExpense(context.Background(), e, writer)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(ContainSubstring("Category: Food"))
+		Expect(out).To(ContainSubstring("Subcategory: Cafe"))
+		Expect(out).To(ContainSubstring("Wallet: Cash"))
+		Expect(out).To(ContainSubstring("Date: " + date))
+	})
+
+	It("prints - when foreign keys are nil", func() {
+		writer := newFakeWriter()
+		e := &handler.EnrichedExpense{DateCreated: 1787311140}
+		out, err := formatEnrichedExpense(context.Background(), e, writer)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(ContainSubstring("Category: -"))
+		Expect(out).To(ContainSubstring("Subcategory: -"))
+		Expect(out).To(ContainSubstring("Wallet: -"))
+		Expect(out).To(ContainSubstring("Date: " + date))
+	})
+
+	It("returns an error when a category is not found", func() {
+		writer := newFakeWriter()
+		e := &handler.EnrichedExpense{CategoryFK: s("unknown-cat")}
+		_, err := formatEnrichedExpense(context.Background(), e, writer)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("returns an error when a subcategory is not found", func() {
+		writer := newFakeWriter()
+		e := &handler.EnrichedExpense{SubCategoryFK: s("unknown-subcat")}
+		_, err := formatEnrichedExpense(context.Background(), e, writer)
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("returns an error when a wallet is not found", func() {
+		writer := newFakeWriter()
+		e := &handler.EnrichedExpense{WalletFK: s("unknown-wallet")}
+		_, err := formatEnrichedExpense(context.Background(), e, writer)
+		Expect(err).To(HaveOccurred())
+	})
+})

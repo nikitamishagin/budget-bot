@@ -254,6 +254,32 @@ func (s *Store) ResolveWallet(ctx context.Context, input string) (walletPK strin
 	return walletPK, true, nil
 }
 
+// CategoryName returns categories.name for the given category_pk. A missing row is a soft miss:
+// it returns "", false, nil.
+func (s *Store) CategoryName(ctx context.Context, pk string) (string, bool, error) {
+	return s.nameByPK(ctx, "category", `SELECT name FROM categories WHERE category_pk = ?`, pk)
+}
+
+// WalletName returns wallets.name for the given wallet_pk. A missing row is a soft miss:
+// it returns "", false, nil.
+func (s *Store) WalletName(ctx context.Context, pk string) (string, bool, error) {
+	return s.nameByPK(ctx, "wallet", `SELECT name FROM wallets WHERE wallet_pk = ?`, pk)
+}
+
+func (s *Store) nameByPK(ctx context.Context, kind, query, pk string) (string, bool, error) {
+	if pk == "" {
+		return "", false, nil
+	}
+	var name string
+	if err := s.db.QueryRowContext(ctx, query, pk).Scan(&name); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("%s name: %w", kind, err)
+	}
+	return name, true, nil
+}
+
 // nullInt64Ptr converts a sql.NullInt64 into a *int64, nil when the column was NULL.
 func nullInt64Ptr(v sql.NullInt64) *int64 {
 	if !v.Valid {

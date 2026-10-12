@@ -30,6 +30,8 @@ type ExpenseWriter interface {
 	handler.DBLookup
 	ResolveCategory(ctx context.Context, input string) (categoryPK string, isSubcategory bool, found bool, err error)
 	ResolveWallet(ctx context.Context, input string) (walletPK string, found bool, err error)
+	CategoryName(ctx context.Context, pk string) (name string, found bool, err error)
+	WalletName(ctx context.Context, pk string) (name string, found bool, err error)
 	Insert(ctx context.Context, exp handler.EnrichedExpense) (store.InsertResult, error)
 	Close() error
 }

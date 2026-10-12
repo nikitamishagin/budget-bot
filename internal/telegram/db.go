@@ -71,6 +71,14 @@ func (a *storeAdapter) ResolveCategory(ctx context.Context, input string) (categ
 	return a.store.ResolveCategory(ctx, input)
 }
 
+func (a *storeAdapter) CategoryName(ctx context.Context, pk string) (string, bool, error) {
+	return a.store.CategoryName(ctx, pk)
+}
+
+func (a *storeAdapter) WalletName(ctx context.Context, pk string) (string, bool, error) {
+	return a.store.WalletName(ctx, pk)
+}
+
 func (a *storeAdapter) ResolveWallet(ctx context.Context, input string) (walletPK string, found bool, err error) {
 	return a.store.ResolveWallet(ctx, input)
 }

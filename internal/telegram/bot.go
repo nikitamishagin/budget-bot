@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -352,8 +353,14 @@ func (b *Bot) handleApprovalAnswer(ctx context.Context, chatID int64, state *pen
 		b.returnDatabase(chatID)
 	case "no", "n", "cancel":
 		log.Info().Int64("chat_id", chatID).Int("count", len(state.batch)).Msg("user rejected batch, saving as unapproved data for editing")
+		formatted, err := b.formatBatchForChat(ctx, chatID, state.batch)
+		if err != nil {
+			log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to format unapproved batch")
+			b.reply(chatID, "Sorry, I could not prepare the list. Please try again.")
+			return
+		}
 		b.sessions.set(chatID, &pendingState{kind: pendingEditing, batch: state.batch})
-		b.reply(chatID, "Kept as unapproved data so you can fix it.\n\n"+formatBatch(state.batch)+
+		b.reply(chatID, "Kept as unapproved data so you can fix it.\n\n"+formatted+
 			"\n\nTo fix an entry, reply with \"edit <number> category|wallet|name <value>\" (e.g. \"edit 1 category cat-coffee\"). "+
 			"Reply \"approve\" to save the list as-is, or \"discard\" to drop it entirely.")
 	default:
@@ -438,9 +445,15 @@ func (b *Bot) applyEdit(ctx context.Context, chatID int64, state *pendingState, 
 		b.reply(chatID, "Unknown field. Use \"category\", \"wallet\", or \"name\".")
 		return
 	}
+	formatted, err := b.formatBatchForChat(ctx, chatID, state.batch)
+	if err != nil {
+		log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to format unapproved batch after edit")
+		b.reply(chatID, "Sorry, I could not prepare the list. Please try again.")
+		return
+	}
 	b.sessions.set(chatID, state)
 	log.Info().Int64("chat_id", chatID).Int("entry", index).Str("field", field).Msg("edited unapproved batch entry")
-	b.reply(chatID, "Updated.\n\n"+formatBatch(state.batch)+"\n\nReply \"approve\" to save, keep editing, or \"discard\".")
+	b.reply(chatID, "Updated.\n\n"+formatted+"\n\nReply \"approve\" to save, keep editing, or \"discard\".")
 }
 
 // saveBatch inserts every expense in a batch into the chat's SQLite database file, skipping any
@@ -543,20 +556,26 @@ func (b *Bot) processNext(ctx context.Context, chatID int64) {
 		state.queue = remaining
 	}
 
-	b.askBatchApproval(chatID, state.batch)
+	b.askBatchApproval(ctx, chatID, state.batch)
 }
 
 // askBatchApproval asks the chat to approve saving every expense aggregated during the current
 // /parse run.
-func (b *Bot) askBatchApproval(chatID int64, batch []*handler.EnrichedExpense) {
+func (b *Bot) askBatchApproval(ctx context.Context, chatID int64, batch []*handler.EnrichedExpense) {
 	if len(batch) == 0 {
 		b.sessions.clear(chatID)
 		b.reply(chatID, "Nothing left to save.")
 		return
 	}
+	formatted, err := b.formatBatchForChat(ctx, chatID, batch)
+	if err != nil {
+		log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to format batch for approval")
+		b.reply(chatID, "Sorry, I could not prepare the list. Please try again.")
+		return
+	}
 	b.sessions.set(chatID, &pendingState{kind: pendingApproval, batch: batch})
 	log.Info().Int64("chat_id", chatID).Int("count", len(batch)).Msg("asked user for batch save approval")
-	b.reply(chatID, formatBatch(batch)+"\n\nSave these transactions? (yes/no)")
+	b.reply(chatID, formatted+"\n\nSave these transactions? (yes/no)")
 }
 
 func (b *Bot) reply(chatID int64, text string) {
@@ -572,19 +591,60 @@ func isWalletQuestion(question string) bool {
 	return strings.Contains(question, "does account")
 }
 
-func formatEnrichedExpense(e *handler.EnrichedExpense) string {
+// formatBatchForChat opens the chat's database and renders the batch.
+func (b *Bot) formatBatchForChat(ctx context.Context, chatID int64, batch []*handler.EnrichedExpense) (string, error) {
+	db, err := b.openDB(chatID)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	return formatBatch(ctx, db, batch)
+}
+
+func formatEnrichedExpense(ctx context.Context, e *handler.EnrichedExpense, db ExpenseWriter) (string, error) {
 	kind := "Expense"
 	if e.Income != nil && *e.Income != 0 {
 		kind = "Income"
 	}
-	sub := "-"
-	if e.SubCategoryFK != nil && *e.SubCategoryFK != "" {
-		sub = *e.SubCategoryFK
+	categoryName := "-"
+	if e.CategoryFK != nil {
+		name, found, err := db.CategoryName(ctx, *e.CategoryFK)
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", fmt.Errorf("category %q not found", *e.CategoryFK)
+		}
+		categoryName = name
 	}
+	subcategoryName := "-"
+	if e.SubCategoryFK != nil {
+		name, found, err := db.CategoryName(ctx, *e.SubCategoryFK)
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", fmt.Errorf("category %q not found", *e.SubCategoryFK)
+		}
+		subcategoryName = name
+	}
+	walletName := "-"
+	if e.WalletFK != nil {
+		name, found, err := db.WalletName(ctx, *e.WalletFK)
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", fmt.Errorf("wallet %q not found", *e.WalletFK)
+		}
+		walletName = name
+	}
+	formattedDate := time.Unix(e.DateCreated, 0).Format("2006-01-02 15:04")
 	return fmt.Sprintf(
-		"%s: %s\nAmount: %.2f\nCategory: %s\nSubcategory: %s\nWallet: %s\nNote: %s\nDate: %d",
-		kind, strOrDash(e.Name), e.Amount, strOrDash(e.CategoryFK), sub, strOrDash(e.WalletFK), strOrDash(e.Note), e.DateCreated,
-	)
+		"%s: %s\nAmount: %.2f\nCategory: %s\nSubcategory: %s\nWallet: %s\nNote: %s\nDate: %s",
+		kind, strOrDash(e.Name), e.Amount, categoryName, subcategoryName,
+		walletName, strOrDash(e.Note), formattedDate,
+	), nil
 }
 
 // strOrDash dereferences a possibly-nil string pointer, returning "-" when nil or empty.
@@ -598,13 +658,17 @@ func strOrDash(s *string) string {
 // formatBatch renders every expense in a batch as a numbered list, so the user can refer to an
 // entry by number when editing a rejected batch (see applyEdit) or simply review it before
 // approving.
-func formatBatch(batch []*handler.EnrichedExpense) string {
+func formatBatch(ctx context.Context, db ExpenseWriter, batch []*handler.EnrichedExpense) (string, error) {
 	var b strings.Builder
 	for i, e := range batch {
 		if i > 0 {
 			b.WriteString("\n\n")
 		}
-		fmt.Fprintf(&b, "%d. %s", i+1, formatEnrichedExpense(e))
+		formatted, err := formatEnrichedExpense(ctx, e, db)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "%d. %s", i+1, formatted)
 	}
-	return b.String()
+	return b.String(), nil
 }

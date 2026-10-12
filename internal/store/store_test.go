@@ -428,3 +428,34 @@ var _ = Describe("ResolveCategory and ResolveWallet", func() {
 		Expect(pk).To(BeEmpty())
 	})
 })
+
+var _ = Describe("CategoryName and WalletName", func() {
+	It("returns names by primary key and a soft miss otherwise", func() {
+		s, _ := newTestDB(
+			`INSERT INTO categories (category_pk, name, main_category_pk) VALUES ('cat-food', 'Food & Dining', NULL)`,
+			`INSERT INTO wallets (wallet_pk, name) VALUES ('wallet-main', 'Checking Account')`,
+		)
+		defer s.Close()
+		ctx := context.Background()
+
+		name, ok, err := s.CategoryName(ctx, "cat-food")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(name).To(Equal("Food & Dining"))
+
+		name, ok, err = s.CategoryName(ctx, "missing")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeFalse())
+		Expect(name).To(BeEmpty())
+
+		name, ok, err = s.WalletName(ctx, "wallet-main")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(name).To(Equal("Checking Account"))
+
+		name, ok, err = s.WalletName(ctx, "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ok).To(BeFalse())
+		Expect(name).To(BeEmpty())
+	})
+})
