@@ -8,6 +8,7 @@ import (
 
 	"github.com/nikitamishagin/budget-bot/internal/llmparser"
 	"github.com/nikitamishagin/budget-bot/internal/memory"
+	"github.com/rs/zerolog/log"
 )
 
 // MemoryStore is the subset of *memory.Store that the Enricher depends on.
@@ -104,11 +105,14 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		if reason == "" {
 			reason = "the message could not be parsed"
 		}
+		log.Debug().Str("reason", reason).Msg("enrich: parse failed, asking user")
 		return Result{NeedsUserInput: true, Question: fmt.Sprintf("I could not parse this message (%s). Could you clarify the transaction details?", reason)}, nil
 	}
 
 	description := strings.TrimSpace(exp.Description)
+	log.Debug().Str("description", description).Str("account", exp.Account).Str("currency", exp.Currency).Msg("enrich: start")
 	if description == "" {
+		log.Debug().Msg("enrich: empty description, asking user")
 		return Result{NeedsUserInput: true, Question: "I could not determine the merchant/counterparty for this transaction. What is it for?"}, nil
 	}
 
@@ -116,7 +120,9 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 	if err != nil {
 		return Result{}, err
 	}
+	log.Debug().Bool("known", walletKnown).Str("wallet_fk", walletFK).Msg("enrich: wallet resolved")
 	if !walletKnown {
+		log.Debug().Msg("enrich: unknown wallet, asking user")
 		return Result{NeedsUserInput: true, Question: walletQuestion(exp.Account, exp.Currency)}, nil
 	}
 
@@ -128,18 +134,24 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 	if err != nil {
 		return Result{}, err
 	}
+	log.Debug().Bool("similar_found", similar != DBSimilarFields{}).Msg("enrich: similar transaction lookup")
 
 	best, ok, err := e.Memory.FindBestMatch(ctx, description)
 	if err != nil {
 		return Result{}, fmt.Errorf("find best memory match: %w", err)
 	}
+	log.Debug().Bool("matched", ok && best.Score >= e.HighConfidenceThreshold).Float64("score", best.Score).Float64("threshold", e.HighConfidenceThreshold).Msg("enrich: memory best match")
 	if ok && best.Score >= e.HighConfidenceThreshold {
 		if (similar == DBSimilarFields{}) && best.Name != nil && *best.Name != "" {
 			sim, err := lookupSimilar(ctx, *best.Name, lookup)
+			if err != nil {
+				log.Debug().Err(err).Str("name", *best.Name).Msg("enrich: similar lookup by memory name failed, ignoring")
+			}
 			if err == nil && (sim != DBSimilarFields{}) {
 				similar = sim
 			}
 		}
+		log.Debug().Msg("enrich: result from memory high-confidence match")
 		return Result{Expense: e.buildExpense(exp, best.TransactionMappings, walletFK, similar)}, nil
 	}
 
@@ -147,6 +159,7 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 	if err != nil {
 		return Result{}, fmt.Errorf("find top candidates: %w", err)
 	}
+	log.Debug().Int("count", len(candidates)).Msg("enrich: memory top candidates")
 
 	llmCandidates := toLLMCandidates(candidates, walletFK)
 	if len(llmCandidates) == 0 && lookup != nil {
@@ -154,6 +167,7 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		if err != nil {
 			return Result{}, fmt.Errorf("find db candidates: %w", err)
 		}
+		log.Debug().Int("count", len(dbCandidates)).Msg("enrich: sqlite fallback candidates")
 		llmCandidates = dbToLLMCandidates(dbCandidates)
 	}
 
@@ -161,8 +175,10 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 	if err != nil {
 		return Result{}, fmt.Errorf("resolve description: %w", err)
 	}
+	log.Debug().Int("candidates", len(llmCandidates)).Bool("matched", resolution.Matched).Bool("needs_user_input", resolution.NeedsUserInput).Int("matched_index", resolution.MatchedIndex).Msg("enrich: llm resolution")
 
 	if resolution.NeedsUserInput || !resolution.Matched {
+		log.Debug().Msg("enrich: llm unsure, asking user for name")
 		// The question must always quote the exact raw description from the SMS data (description), so
 		// we build it ourselves rather than trusting the LLM's freeform question to include it. Name,
 		// category and subcategory are then asked one at a time by the caller (see
@@ -189,6 +205,7 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 	if err := e.Memory.SaveTransactionMapping(ctx, mapping); err != nil {
 		return Result{}, fmt.Errorf("save transaction mapping: %w", err)
 	}
+	log.Debug().Str("pattern", description).Msg("enrich: transaction mapping saved, expense built")
 
 	return Result{Expense: e.buildExpense(exp, mapping, walletFK, similar)}, nil
 }
@@ -198,6 +215,7 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 // or the user) flows back into memory, so the same description/account is recognized automatically
 // next time.
 func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expense, name, categoryFK, subCategoryFK, walletFK string, income bool, db ...DBLookup) (*EnrichedExpense, error) {
+	log.Debug().Str("name", name).Str("category_fk", categoryFK).Str("sub_category_fk", subCategoryFK).Str("wallet_fk", walletFK).Bool("income", income).Str("description", strings.TrimSpace(exp.Description)).Msg("enrich: user input received")
 	if categoryFK == "" || walletFK == "" {
 		return nil, fmt.Errorf("category_fk and wallet_fk are required")
 	}
@@ -210,6 +228,7 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 		}); err != nil {
 			return nil, fmt.Errorf("save wallet mapping: %w", err)
 		}
+		log.Debug().Str("account", account).Str("currency", exp.Currency).Str("wallet_fk", walletFK).Msg("enrich: wallet mapping saved")
 	}
 
 	var lookup DBLookup
@@ -218,7 +237,11 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 	}
 	var similar DBSimilarFields
 	if lookup != nil {
-		if sim, err := lookupSimilar(ctx, name, lookup); err == nil {
+		sim, err := lookupSimilar(ctx, name, lookup)
+		if err != nil {
+			log.Debug().Err(err).Str("name", name).Msg("enrich: similar lookup for user input failed, ignoring")
+		}
+		if err == nil {
 			similar = sim
 		}
 	}
@@ -237,6 +260,9 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 		if err := e.Memory.SaveTransactionMapping(ctx, mapping); err != nil {
 			return nil, fmt.Errorf("save transaction mapping: %w", err)
 		}
+		log.Debug().Str("pattern", description).Msg("enrich: transaction mapping saved from user input")
+	} else {
+		log.Debug().Msg("enrich: empty description, transaction mapping save skipped")
 	}
 
 	return e.buildExpense(exp, mapping, walletFK, similar), nil
