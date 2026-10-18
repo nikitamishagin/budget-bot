@@ -80,55 +80,34 @@ func Run(ctx context.Context, token string, bot *Bot) error {
 			api.StopReceivingUpdates()
 			return nil
 		case update := <-updates:
-			handleUpdate(ctx, bot, &apiSender{api: api}, update)
+			if u, ok := fromTG(update); ok {
+				bot.HandleUpdate(ctx, u)
+			}
 		}
 	}
 }
 
-// handleUpdate dispatches a single Telegram update to the appropriate Bot method, rejecting
-// messages from users not listed in the bot's allowlist.
-func handleUpdate(ctx context.Context, bot *Bot, sender Sender, update tgbotapi.Update) {
-	if update.Message == nil {
-		return
-	}
+// fromTG converts a Telegram update into a transport-neutral Update. It reports false for
+// updates that carry no message.
+func fromTG(update tgbotapi.Update) (Update, bool) {
 	msg := update.Message
+	if msg == nil {
+		return Update{}, false
+	}
 
-	var username string
+	u := Update{ChatID: msg.Chat.ID, Text: msg.Text}
 	if msg.From != nil {
-		username = msg.From.UserName
+		u.Username = msg.From.UserName
 	}
-	if !bot.IsAllowed(username) {
-		log.Warn().Str("username", username).Msg("rejected message from unauthorized user")
-		return
+	if msg.IsCommand() {
+		u.Command = msg.Command()
 	}
-
-	chatID := msg.Chat.ID
-
-	switch {
-	case msg.IsCommand():
-		log.Info().Str("username", username).Int64("chat_id", chatID).Str("command", msg.Command()).Msg("user sent command")
-		bot.HandleCommand(ctx, chatID, msg.Command())
-	case msg.Document != nil:
-		log.Info().Str("username", username).Int64("chat_id", chatID).Str("file_name", msg.Document.FileName).Msg("received file from user")
-		data, err := sender.DownloadDocument(msg.Document.FileID)
-		if err != nil {
-			log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to download document")
-			_ = sender.SendMessage(chatID, "Sorry, I could not download that file.")
-			return
-		}
-		bot.HandleDocument(chatID, msg.Document.FileName, data)
-	case len(msg.Photo) > 0:
-		log.Info().Str("username", username).Int64("chat_id", chatID).Msg("received screenshot from user")
+	if msg.Document != nil {
+		u.Document = &File{ID: msg.Document.FileID, Name: msg.Document.FileName, MIME: msg.Document.MimeType}
+	}
+	if len(msg.Photo) > 0 {
 		largest := msg.Photo[len(msg.Photo)-1]
-		data, err := sender.DownloadPhoto(largest.FileID)
-		if err != nil {
-			log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to download photo")
-			_ = sender.SendMessage(chatID, "Sorry, I could not download that photo.")
-			return
-		}
-		bot.HandlePhoto(ctx, chatID, data, "image/jpeg")
-	case msg.Text != "":
-		log.Info().Str("username", username).Int64("chat_id", chatID).Str("reply", msg.Text).Msg("received text reply from user")
-		bot.HandleText(ctx, chatID, msg.Text)
+		u.Photo = &File{ID: largest.FileID, MIME: "image/jpeg"}
 	}
+	return u, true
 }
