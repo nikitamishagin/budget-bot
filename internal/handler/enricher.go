@@ -106,14 +106,14 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 			reason = "the message could not be parsed"
 		}
 		log.Debug().Str("reason", reason).Msg("enrich: parse failed, asking user")
-		return Result{NeedsUserInput: true, Question: fmt.Sprintf("I could not parse this message (%s). Could you clarify the transaction details?", reason)}, nil
+		return Result{NeedsUserInput: true, Question: fmt.Sprintf("I could not parse this message (%s). Could you clarify the transaction details?", reason), Kind: QuestionClarify}, nil
 	}
 
 	description := strings.TrimSpace(exp.Description)
 	log.Debug().Str("description", description).Str("account", exp.Account).Str("currency", exp.Currency).Msg("enrich: start")
 	if description == "" {
 		log.Debug().Msg("enrich: empty description, asking user")
-		return Result{NeedsUserInput: true, Question: "I could not determine the merchant/counterparty for this transaction. What is it for?"}, nil
+		return Result{NeedsUserInput: true, Question: "I could not determine the merchant/counterparty for this transaction. What is it for?", Kind: QuestionClarify}, nil
 	}
 
 	walletFK, walletKnown, err := e.resolveWallet(ctx, exp.Account, exp.Currency)
@@ -123,7 +123,7 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 	log.Debug().Bool("known", walletKnown).Str("wallet_fk", walletFK).Msg("enrich: wallet resolved")
 	if !walletKnown {
 		log.Debug().Msg("enrich: unknown wallet, asking user")
-		return Result{NeedsUserInput: true, Question: walletQuestion(exp.Account, exp.Currency)}, nil
+		return Result{NeedsUserInput: true, Question: walletQuestion(exp.Account, exp.Currency), Kind: QuestionWallet}, nil
 	}
 
 	var lookup DBLookup
@@ -183,7 +183,7 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		// we build it ourselves rather than trusting the LLM's freeform question to include it. Name,
 		// category and subcategory are then asked one at a time by the caller (see
 		// internal/telegram/bot.go processNext/handleNameAnswer/handleCategoryAnswer).
-		return Result{NeedsUserInput: true, Question: NameQuestion(description)}, nil
+		return Result{NeedsUserInput: true, Question: NameQuestion(description), Kind: QuestionName}, nil
 	}
 
 	mapping := memory.TransactionMappings{

@@ -542,8 +542,14 @@ func (b *Bot) processNext(ctx context.Context, chatID int64) {
 		}
 
 		if result.NeedsUserInput {
+			if result.Kind == handler.QuestionClarify {
+				log.Info().Int64("chat_id", chatID).Str("question", result.Question).Msg("skipped item that needs clarification")
+				b.reply(chatID, result.Question+"\nSkipping this item.")
+				state.queue = remaining
+				continue
+			}
 			kind := pendingName
-			if isWalletQuestion(result.Question) {
+			if result.Kind == handler.QuestionWallet {
 				kind = pendingWallet
 			}
 			b.sessions.set(chatID, &pendingState{kind: kind, expense: exp, queue: remaining, batch: state.batch})
@@ -584,13 +590,6 @@ func (b *Bot) reply(chatID int64, text string) {
 	}
 }
 
-// isWalletQuestion tells apart the "unknown wallet" question the Enricher asks (see
-// resolveWallet in internal/handler) from every other clarification question, so a plain text
-// answer can be routed to the right follow-up action.
-func isWalletQuestion(question string) bool {
-	return strings.Contains(question, "does account")
-}
-
 // formatBatchForChat opens the chat's database and renders the batch.
 func (b *Bot) formatBatchForChat(ctx context.Context, chatID int64, batch []*handler.EnrichedExpense) (string, error) {
 	db, err := b.openDB(chatID)
@@ -602,6 +601,24 @@ func (b *Bot) formatBatchForChat(ctx context.Context, chatID int64, batch []*han
 }
 
 func formatEnrichedExpense(ctx context.Context, e *handler.EnrichedExpense, db ExpenseWriter) (string, error) {
+	if e == nil {
+		return "", fmt.Errorf("enriched expense is nil")
+	}
+	incomeVal := int64(0)
+	if e.Income != nil {
+		incomeVal = *e.Income
+	}
+	log.Debug().
+		Str("name", strOrDash(e.Name)).
+		Float64("amount", e.Amount).
+		Str("category_fk", strOrDash(e.CategoryFK)).
+		Str("sub_category_fk", strOrDash(e.SubCategoryFK)).
+		Str("wallet_fk", strOrDash(e.WalletFK)).
+		Str("note", strOrDash(e.Note)).
+		Int64("income", incomeVal).
+		Int64("date_created", e.DateCreated).
+		Msg("formatting enriched expense")
+
 	kind := "Expense"
 	if e.Income != nil && *e.Income != 0 {
 		kind = "Income"
@@ -610,41 +627,61 @@ func formatEnrichedExpense(ctx context.Context, e *handler.EnrichedExpense, db E
 	if e.CategoryFK != nil {
 		name, found, err := db.CategoryName(ctx, *e.CategoryFK)
 		if err != nil {
+			log.Error().Err(err).Str("category_fk", *e.CategoryFK).Msg("failed to resolve category name")
 			return "", err
 		}
 		if !found {
+			log.Debug().Str("category_fk", *e.CategoryFK).Msg("category not found")
 			return "", fmt.Errorf("category %q not found", *e.CategoryFK)
 		}
 		categoryName = name
+		log.Debug().Str("category_fk", *e.CategoryFK).Str("category_name", categoryName).Msg("category resolved")
+	} else {
+		log.Debug().Msg("category fk is nil, skipped lookup")
 	}
+
 	subcategoryName := "-"
 	if e.SubCategoryFK != nil {
 		name, found, err := db.CategoryName(ctx, *e.SubCategoryFK)
 		if err != nil {
+			log.Error().Err(err).Str("sub_category_fk", *e.SubCategoryFK).Msg("failed to resolve subcategory name")
 			return "", err
 		}
 		if !found {
+			log.Debug().Str("sub_category_fk", *e.SubCategoryFK).Msg("subcategory not found")
 			return "", fmt.Errorf("category %q not found", *e.SubCategoryFK)
 		}
 		subcategoryName = name
+		log.Debug().Str("sub_category_fk", *e.SubCategoryFK).Str("subcategory_name", subcategoryName).Msg("subcategory resolved")
+	} else {
+		log.Debug().Msg("subcategory fk is nil, skipped lookup")
 	}
+
 	walletName := "-"
 	if e.WalletFK != nil {
 		name, found, err := db.WalletName(ctx, *e.WalletFK)
 		if err != nil {
+			log.Error().Err(err).Str("wallet_fk", *e.WalletFK).Msg("failed to resolve wallet name")
 			return "", err
 		}
 		if !found {
+			log.Debug().Str("wallet_fk", *e.WalletFK).Msg("wallet not found")
 			return "", fmt.Errorf("wallet %q not found", *e.WalletFK)
 		}
 		walletName = name
+		log.Debug().Str("wallet_fk", *e.WalletFK).Str("wallet_name", walletName).Msg("wallet resolved")
+	} else {
+		log.Debug().Msg("wallet fk is nil, skipped lookup")
 	}
+
 	formattedDate := time.Unix(e.DateCreated, 0).Format("2006-01-02 15:04")
-	return fmt.Sprintf(
+	formatted := fmt.Sprintf(
 		"%s: %s\nAmount: %.2f\nCategory: %s\nSubcategory: %s\nWallet: %s\nNote: %s\nDate: %s",
 		kind, strOrDash(e.Name), e.Amount, categoryName, subcategoryName,
 		walletName, strOrDash(e.Note), formattedDate,
-	), nil
+	)
+	log.Debug().Str("formatted", formatted).Msg("formatted enriched expense")
+	return formatted, nil
 }
 
 // strOrDash dereferences a possibly-nil string pointer, returning "-" when nil or empty.

@@ -49,4 +49,18 @@ type Result struct {
 	// Enricher.ResolveWithUserInput.
 	NeedsUserInput bool
 	Question       string
+	// Kind classifies Question so callers know how to route the user's reply.
+	Kind QuestionKind
 }
+
+// QuestionKind classifies a question the Enricher asks the user.
+type QuestionKind string
+
+const (
+	// QuestionWallet asks which wallet an unknown bank account belongs to.
+	QuestionWallet QuestionKind = "wallet"
+	// QuestionName asks for the name (then category) of an unknown merchant.
+	QuestionName QuestionKind = "name"
+	// QuestionClarify is informational: the item cannot be processed and no answer is expected.
+	QuestionClarify QuestionKind = "clarify"
+)

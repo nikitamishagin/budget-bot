@@ -114,6 +114,7 @@ var _ = Describe("Enricher.Enrich", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.NeedsUserInput).To(BeTrue())
+		Expect(result.Kind).To(Equal(QuestionClarify))
 		Expect(result.Question).To(ContainSubstring("blurry image"))
 		Expect(res.calls).To(Equal(0))
 	})
@@ -125,6 +126,7 @@ var _ = Describe("Enricher.Enrich", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.NeedsUserInput).To(BeTrue())
+		Expect(result.Kind).To(Equal(QuestionWallet))
 		Expect(result.Question).To(ContainSubstring("9999"))
 		Expect(res.calls).To(Equal(0))
 	})
@@ -186,6 +188,7 @@ var _ = Describe("Enricher.Enrich", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.NeedsUserInput).To(BeTrue())
+		Expect(result.Kind).To(Equal(QuestionName))
 		// The question is always built from the raw SMS description, not the LLM's freeform text.
 		Expect(result.Question).To(ContainSubstring(`"Starbucks Coffee"`))
 		Expect(mem.saveCalls).To(Equal(0)) // nothing saved for this expense

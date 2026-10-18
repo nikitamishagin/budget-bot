@@ -155,12 +155,16 @@ func (f *fakeParser) ParseImageBytes(_ context.Context, _ []byte, _ string) ([]l
 // fakeEnricher is a scripted Enricher for tests.
 type fakeEnricher struct {
 	result       handler.Result
+	byDesc       map[string]handler.Result // optional per-description override of result
 	err          error
 	resolveCalls int
 	resolveArgs  []string
 }
 
-func (f *fakeEnricher) Enrich(_ context.Context, _ llmparser.Expense, _ ...handler.DBLookup) (handler.Result, error) {
+func (f *fakeEnricher) Enrich(_ context.Context, exp llmparser.Expense, _ ...handler.DBLookup) (handler.Result, error) {
+	if r, ok := f.byDesc[exp.Description]; ok {
+		return r, f.err
+	}
 	return f.result, f.err
 }
 
@@ -271,7 +275,7 @@ var _ = Describe("Bot.HandlePhoto and Bot.HandleParse", func() {
 
 	It("relays the clarification question when the enricher needs user input", func() {
 		sender := &fakeSender{}
-		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "Which wallet does account \"1234\" belong to?"}}
+		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "Which wallet does account \"1234\" belong to?", Kind: handler.QuestionWallet}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Unknown Shop", Account: "1234"}}}
 		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("fake-image"), "image/jpeg")
@@ -279,6 +283,23 @@ var _ = Describe("Bot.HandlePhoto and Bot.HandleParse", func() {
 		bot.HandleParse(context.Background(), 1)
 
 		Expect(sender.last()).To(ContainSubstring("wallet"))
+	})
+
+	It("skips a clarify item with a message and continues with the next queued item", func() {
+		sender := &fakeSender{}
+		enricher := &fakeEnricher{byDesc: map[string]handler.Result{
+			"Broken": {NeedsUserInput: true, Question: "I could not parse this message (blurry).", Kind: handler.QuestionClarify},
+			"Good":   {Expense: &handler.EnrichedExpense{Name: strP("Starbucks"), Amount: 9.5, CategoryFK: strP("cat-food"), WalletFK: strP("wallet-main")}},
+		}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Broken"}, {Description: "Good"}}}
+		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"})
+		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+
+		bot.HandleParse(context.Background(), 1)
+
+		Expect(sender.messages).To(ContainElement(ContainSubstring("could not parse this message")))
+		Expect(sender.last()).To(ContainSubstring("Save these transactions?"))
+		Expect(sender.last()).To(ContainSubstring("Starbucks"))
 	})
 
 	It("informs the user when a screenshot cannot be parsed and no transaction is found", func() {
@@ -315,7 +336,7 @@ var _ = Describe("Bot.HandleText", func() {
 	It("re-runs enrichment after the user names the wallet for an unknown account", func() {
 		sender := &fakeSender{}
 		accounts := newFakeAccounts()
-		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "Which wallet does account \"1234\" belong to?"}}
+		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "Which wallet does account \"1234\" belong to?", Kind: handler.QuestionWallet}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Unknown Shop", Account: "1234"}}}
 		bot := newTestBot(sender, parser, enricher, accounts, []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
@@ -332,7 +353,7 @@ var _ = Describe("Bot.HandleText", func() {
 		sender := &fakeSender{}
 		accounts := newFakeAccounts()
 		accounts.wallets["1234|"] = memory.WalletMappings{AccountPattern: "1234", WalletFK: "wallet-main"}
-		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "What is the name of the \"Unknown Shop\" expense?"}}
+		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "What is the name of the \"Unknown Shop\" expense?", Kind: handler.QuestionName}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Unknown Shop", Account: "1234"}}}
 		bot := newTestBot(sender, parser, enricher, accounts, []string{"alice"})
 		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
@@ -423,7 +444,7 @@ var _ = Describe("Bot.HandleText", func() {
 		writer.subcats["Groceries"] = true
 
 		accounts := newFakeAccounts()
-		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "Which wallet does account \"9999\" belong to?"}}
+		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "Which wallet does account \"9999\" belong to?", Kind: handler.QuestionWallet}}
 		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Supermarket", Account: "9999", Currency: "USD"}}}
 		bot := newTestBot(sender, parser, enricher, accounts, []string{"alice"})
 		bot.OpenDatabase = func(string) (ExpenseWriter, error) { return writer, nil }
@@ -436,7 +457,7 @@ var _ = Describe("Bot.HandleText", func() {
 		Expect(sender.last()).To(ContainSubstring("Wallet not found in database. Please enter a valid wallet name:"))
 
 		// Wallet answer with valid wallet name -> resolves to wallet_pk-123
-		enricher.result = handler.Result{NeedsUserInput: true, Question: "What is the name of the \"Supermarket\" expense?"}
+		enricher.result = handler.Result{NeedsUserInput: true, Question: "What is the name of the \"Supermarket\" expense?", Kind: handler.QuestionName}
 		bot.HandleText(context.Background(), 1, "My Card")
 		Expect(accounts.wallets["9999|USD"].WalletFK).To(Equal("wallet-pk-123"))
 		Expect(accounts.wallets["9999|USD"].Name).To(Equal("My Card"))
