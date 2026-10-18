@@ -1,0 +1,8 @@
+{
+  "description": "Synthetic example used by the loader unit test; real scenarios replace these files.",
+  "draft": false,
+  "transactions": [
+    {"name": "Coffee", "amount": -3.5, "category": "Food", "wallet": "Cash", "note": "COFFEE SHOP"}
+  ],
+  "reply_contains": ["Database saved", "Save these transactions"]
+}
