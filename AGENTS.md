@@ -38,6 +38,7 @@ together end-to-end:
 - `internal/store` — SQLite access: inserting parsed expenses, duplicate/conflict detection before and after insert.
 - `internal/config` — YAML + Viper configuration loading (LLM, memory, telegram sections).
 - something else if it can be helpful
+- `bin/agent` — the compiled binary.
 
 ## The main loop
 

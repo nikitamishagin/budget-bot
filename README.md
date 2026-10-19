@@ -67,8 +67,8 @@ telegram:
 Build and run the agent:
 
 ```bash
-go build -o agent ./cmd/agent
-./agent -c config.yaml
+go build -o ./bin/agent ./cmd/agent
+./bin/agent -c config.yaml
 ```
 
 After running the agent, the Telegram bot can be used to interact with the expense tracker.
