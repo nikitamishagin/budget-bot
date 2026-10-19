@@ -20,6 +20,9 @@ const (
 	ScreenshotsDir = "screenshots"
 	// ExpectedFile holds the expected results.
 	ExpectedFile = "expected.json"
+	// MemoryFile is the SQL script that seeds the agent memory for a scenario. It is required,
+	// but may be empty.
+	MemoryFile = "memory.sql"
 )
 
 // Screenshot is one screenshot to send to the bot.
@@ -55,6 +58,7 @@ type Scenario struct {
 	Dir         string
 	Database    []byte
 	Screenshots []Screenshot
+	MemorySQL   string
 	Expected    Expected
 }
 
@@ -98,11 +102,17 @@ func Load(dir string) (*Scenario, error) {
 		return nil, fmt.Errorf("parse %s: %w", ExpectedFile, err)
 	}
 
+	memory, err := os.ReadFile(filepath.Join(dir, MemoryFile))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", MemoryFile, err)
+	}
+
 	return &Scenario{
 		Name:        filepath.Base(dir),
 		Dir:         dir,
 		Database:    db,
 		Screenshots: shots,
+		MemorySQL:   string(memory),
 		Expected:    expected,
 	}, nil
 }
