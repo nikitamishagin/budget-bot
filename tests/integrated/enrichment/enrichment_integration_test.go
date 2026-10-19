@@ -2,7 +2,7 @@
 
 // Package enrichment_test contains integration tests for the raw-SMS-to-enriched-expense
 // pipeline (internal/handler.Enricher), wired against real backends: a Postgres agent memory
-// (internal/memory), a Cashew-shaped SQLite file copied from testdata/test-transaction-data.sql
+// (internal/memory), a Cashew-shaped SQLite file copied from testdata/test-transaction-data.sqlite
 // (a real, minimal Cashew export), and a real, locally running LLM inference server
 // (internal/llmparser.Client). Every case reads its raw input from testdata/test-raw-data.json
 // and its expected result from testdata/answers.json. They are excluded from the default `go test ./...`
@@ -53,7 +53,7 @@ const (
 	// answersPath is a path to expected results. It contains a definition of test cases and connected results.
 	answersPath = "testdata/answers.json"
 	// sqLiteDatabasePath is a path to a real minimal Cashew SQLite database.
-	sqliteDatabasePath = "testdata/test-transaction-data.sql"
+	sqliteDatabasePath = "testdata/test-transaction-data.sqlite"
 )
 
 // defaultTestMemoryDBName is a dedicated Postgres database.
@@ -211,7 +211,7 @@ func expectInt64PtrEqual(actual *int64, expected *int64) {
 // suite creates (the copied SQLite fixture) belongs there too, not under os.TempDir().
 const scratchDataDir = "../../../data"
 
-// newSQLiteFixture copies testdata/test-transaction-data.sql (a real, minimal Cashew export)
+// newSQLiteFixture copies testdata/test-transaction-data.sqlite (a real, minimal Cashew export)
 // into a temporary file under scratchDataDir and opens it, so every test starts from an
 // identical, untouched copy of the fixture regardless of run order.
 func newSQLiteFixture() *store.Store {
