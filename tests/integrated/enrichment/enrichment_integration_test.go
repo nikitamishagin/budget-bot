@@ -109,6 +109,7 @@ type answers struct {
 	LLMFoundMatch     []answerExpense `json:"llm_found_match"`
 	MatchFoundMemory  []answerExpense `json:"match_found_memory"`
 	RequestedFromUser []answerExpense `json:"requested_from_user"`
+	Refund            []answerExpense `json:"refund"`
 }
 
 // loadAnswers reads testdata/answers.json, the single source of truth every case below is
@@ -144,17 +145,17 @@ func toRFC3339(raw string) string {
 	return raw
 }
 
-// findExpense returns the raw expense whose description exactly matches desc, failing the test
+// findExpense returns the raw expense whose type and description exactly match, failing the test
 // if testdata/test-raw-data.json no longer contains it. The returned expense's Date is converted
 // to RFC3339 (see toRFC3339), so it can be fed directly to the Enricher.
-func findExpense(expenses []llmparser.Expense, desc string) llmparser.Expense {
+func findExpense(expenses []llmparser.Expense, desc string, typ llmparser.TransactionType) llmparser.Expense {
 	for _, e := range expenses {
-		if e.Description == desc {
+		if e.Description == desc && e.Type == typ {
 			e.Date = toRFC3339(e.Date)
 			return e
 		}
 	}
-	Fail(fmt.Sprintf("no raw expense with description %q found in %s", desc, rawDataPath))
+	Fail(fmt.Sprintf("no raw %s expense with description %q found in %s", typ, desc, rawDataPath))
 	return llmparser.Expense{}
 }
 
@@ -396,7 +397,7 @@ var _ = Describe("Enricher.Enrich against real memory + SQLite + LLM backends", 
 	It("exact match: resolves directly from SQLite database exact match", func() {
 		Expect(ans.ExactMatch).To(HaveLen(1))
 		want := ans.ExactMatch[0]
-		exp := findExpense(raw, want.Note)
+		exp := findExpense(raw, want.Note, llmparser.TransactionExpense)
 
 		enr := handler.NewEnricher(mem, resolver, 5, memory.HighConfidenceThreshold)
 
@@ -416,7 +417,7 @@ var _ = Describe("Enricher.Enrich against real memory + SQLite + LLM backends", 
 	It("match found in memory: info learned in an earlier session resolves the expense without user input", func() {
 		Expect(ans.MatchFoundMemory).To(HaveLen(1))
 		want := ans.MatchFoundMemory[0]
-		exp := findExpense(raw, want.Note)
+		exp := findExpense(raw, want.Note, llmparser.TransactionExpense)
 
 		// Simulate a mapping learned in an earlier agent session by inserting it directly via
 		// SQL (bypassing SaveTransactionMapping), sourced entirely from testdata/answers.json's
@@ -453,7 +454,7 @@ var _ = Describe("Enricher.Enrich against real memory + SQLite + LLM backends", 
 		enr := handler.NewEnricher(mem, resolver, 5, memory.HighConfidenceThreshold)
 
 		for _, want := range ans.LLMFoundMatch {
-			exp := findExpense(raw, want.Note)
+			exp := findExpense(raw, want.Note, llmparser.TransactionExpense)
 
 			result, err := enr.Enrich(ctx, exp, dbLookup{db})
 
@@ -466,7 +467,7 @@ var _ = Describe("Enricher.Enrich against real memory + SQLite + LLM backends", 
 	It("requested from user: unknown merchant triggers user clarification and resolves with user input", func() {
 		Expect(ans.RequestedFromUser).To(HaveLen(1))
 		want := ans.RequestedFromUser[0]
-		exp := findExpense(raw, want.Note)
+		exp := findExpense(raw, want.Note, llmparser.TransactionExpense)
 
 		enr := handler.NewEnricher(mem, resolver, 5, memory.HighConfidenceThreshold)
 
@@ -481,6 +482,30 @@ var _ = Describe("Enricher.Enrich against real memory + SQLite + LLM backends", 
 		resolved, err := enr.ResolveWithUserInput(ctx, exp, *want.Name, string(want.CategoryFK), strVal(want.SubCategoryFK), want.WalletFK, want.Income != 0, dbLookup{db})
 		Expect(err).NotTo(HaveOccurred())
 		assertMatchesAnswer(resolved, want)
+	})
+
+	It("refund: enriched as Income without merchant mapping, LLM, or user input", func() {
+		Expect(ans.Refund).NotTo(BeEmpty())
+
+		// A nil resolver proves the LLM is never consulted: any call would panic.
+		enr := handler.NewEnricher(mem, nil, 5, memory.HighConfidenceThreshold)
+
+		for _, want := range ans.Refund {
+			exp := findExpense(raw, want.Note, llmparser.TransactionRefund)
+
+			result, err := enr.Enrich(ctx, exp, dbLookup{db})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.NeedsUserInput).To(BeFalse(), "a refund of %q must not ask the user", want.Note)
+			assertMatchesAnswer(result.Expense, want)
+
+			// No merchant mapping may be saved for a refund.
+			saved, ok, err := mem.FindBestMatch(ctx, exp.Description)
+			Expect(err).NotTo(HaveOccurred())
+			if ok {
+				Expect(saved.TransactionPattern).NotTo(Equal(exp.Description))
+			}
+		}
 	})
 })
 
@@ -511,6 +536,10 @@ func (d dbLookup) FindCandidates(ctx context.Context, description string, limit 
 		})
 	}
 	return out, nil
+}
+
+func (d dbLookup) ResolveCategory(ctx context.Context, input string) (string, bool, bool, error) {
+	return d.s.ResolveCategory(ctx, input)
 }
 
 func (d dbLookup) FindSimilar(ctx context.Context, description string) (handler.DBSimilarFields, bool, error) {

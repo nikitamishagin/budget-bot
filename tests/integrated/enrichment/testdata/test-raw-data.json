@@ -52,5 +52,23 @@
     "date": "2026.08.22 15:31",
     "description": "SHOP NB 319",
     "parse_failed": false
+  },
+  {
+    "type": "refund",
+    "amount": 499.99,
+    "currency": "RSD",
+    "bank_account": "1391",
+    "date": "2026.08.23 10:15",
+    "description": "LIDL NEW",
+    "parse_failed": false
+  },
+  {
+    "type": "refund",
+    "amount": 1012.00,
+    "currency": "RSD",
+    "bank_account": "1391",
+    "date": "2026.08.23 11:40",
+    "description": "Temu.com",
+    "parse_failed": false
   }
 ]
