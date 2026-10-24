@@ -94,6 +94,18 @@ The agent enriches each raw transaction with data from memory and the SQLite dat
 one (not batched). Enrichment prepares a transaction for insertion into the SQLite database. During this process, the
 agent also learns new information and persists it to memory.
 
+### Refund path
+
+Refunds (`type` = refund) skip the LLM and the name/category lookup:
+
+- Name is fixed to `Refund` and category to `Income` (looked up in the SQLite `categories` table); income is always 1.
+- Memory holds exactly one `transaction_mappings` row with `transaction_pattern` = `Refund`. It is read by exact lookup
+  (never fuzzy) and saved back after enrichment.
+- No-source fields (see the field resolution rule below) come from that row. Any that are still NULL are topped up from
+  a similar SQLite transaction found by `Refund`, and the merged row is saved back to memory.
+- `original_date_due` is always read live from SQLite, never from memory.
+- The merchant description goes only to `note` on the enriched expense. It is never saved to memory.
+
 ### SQLite tables used for enrichment and learning
 
 - `associated_titles` — maps expense title to category FK.

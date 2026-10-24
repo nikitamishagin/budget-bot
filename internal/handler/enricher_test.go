@@ -24,6 +24,7 @@ type fakeMemory struct {
 	saveAccounts int
 	findCalls    int
 	topCalls     int
+	getCalls     int
 }
 
 func newFakeMemory() *fakeMemory {
@@ -43,6 +44,16 @@ func (f *fakeMemory) FindBestMatch(_ context.Context, pattern string) (memory.Ca
 	return memory.Candidate{TransactionMappings: f.mappings[0], Score: 0.3}, true, nil
 }
 
+func (f *fakeMemory) GetTransactionMapping(_ context.Context, pattern string) (memory.TransactionMappings, bool, error) {
+	f.getCalls++
+	for _, m := range f.mappings {
+		if m.TransactionPattern == pattern {
+			return m, true, nil
+		}
+	}
+	return memory.TransactionMappings{}, false, nil
+}
+
 func (f *fakeMemory) TopCandidates(_ context.Context, _ string, n int) ([]memory.Candidate, error) {
 	f.topCalls++
 	var out []memory.Candidate
@@ -57,6 +68,12 @@ func (f *fakeMemory) TopCandidates(_ context.Context, _ string, n int) ([]memory
 
 func (f *fakeMemory) SaveTransactionMapping(_ context.Context, mapping memory.TransactionMappings) error {
 	f.saveCalls++
+	for i, m := range f.mappings {
+		if m.TransactionPattern == mapping.TransactionPattern {
+			f.mappings[i] = mapping
+			return nil
+		}
+	}
 	f.mappings = append(f.mappings, mapping)
 	return nil
 }
@@ -281,7 +298,18 @@ var _ = Describe("Enricher refunds", func() {
 		mem.wallets["1234|"] = memory.WalletMappings{AccountPattern: "1234", WalletFK: "wallet-main"}
 	})
 
-	It("builds a Refund income expense without touching memory mappings or the LLM", func() {
+	refundRow := func() memory.TransactionMappings {
+		var rows []memory.TransactionMappings
+		for _, m := range mem.mappings {
+			if m.TransactionPattern == "Refund" {
+				rows = append(rows, m)
+			}
+		}
+		Expect(rows).To(HaveLen(1))
+		return rows[0]
+	}
+
+	It("builds a Refund income expense without the LLM and saves one Refund row", func() {
 		result, err := enr.Enrich(ctx, exp, db)
 
 		Expect(err).NotTo(HaveOccurred())
@@ -296,10 +324,16 @@ var _ = Describe("Enricher refunds", func() {
 		Expect(res.calls).To(Equal(0))
 		Expect(mem.findCalls).To(Equal(0))
 		Expect(mem.topCalls).To(Equal(0))
-		Expect(mem.saveCalls).To(Equal(0))
+		Expect(mem.getCalls).To(Equal(1))
+		Expect(mem.saveCalls).To(Equal(1))
+		row := refundRow()
+		Expect(row.Name).To(HaveValue(Equal("Refund")))
+		Expect(row.CategoryFK).To(HaveValue(Equal("cat-income")))
+		Expect(row.Income).To(HaveValue(Equal(int64(1))))
+		Expect(row.Note).To(BeNil())
 	})
 
-	It("ignores an existing merchant mapping and leaves it unchanged", func() {
+	It("never uses the merchant description as a pattern and leaves merchant mappings untouched", func() {
 		mem.mappings = append(mem.mappings, memory.TransactionMappings{
 			TransactionPattern: "Temu.com", Name: strPtr("Temu"), CategoryFK: strPtr("cat-shopping"),
 		})
@@ -309,10 +343,12 @@ var _ = Describe("Enricher refunds", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Expense.Name).To(HaveValue(Equal("Refund")))
 		Expect(result.Expense.CategoryFK).To(HaveValue(Equal("cat-income")))
-		Expect(mem.mappings).To(HaveLen(1))
+		Expect(mem.mappings).To(HaveLen(2))
+		Expect(mem.mappings[0].TransactionPattern).To(Equal("Temu.com"))
 		Expect(mem.mappings[0].Name).To(HaveValue(Equal("Temu")))
 		Expect(mem.mappings[0].CategoryFK).To(HaveValue(Equal("cat-shopping")))
-		Expect(mem.saveCalls).To(Equal(0))
+		Expect(mem.saveCalls).To(Equal(1))
+		Expect(refundRow().TransactionPattern).To(Equal("Refund"))
 	})
 
 	It("asks for the wallet when the account is unknown", func() {
@@ -334,28 +370,109 @@ var _ = Describe("Enricher refunds", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("copies no-source fields from a similar Refund transaction, else leaves them nil", func() {
-		paid, typ := int64(1), int64(7)
-		db.similar = &DBSimilarFields{Paid: &paid, Type: &typ}
+	It("on a memory hit, cached fields win over SQLite while OriginalDateDue comes from SQLite", func() {
+		mem.mappings = append(mem.mappings, memory.TransactionMappings{
+			TransactionPattern: "Refund", Name: strPtr("Refund"), CategoryFK: strPtr("cat-income"),
+			Paid: int64Ptr(1), Type: int64Ptr(7),
+		})
+		due := int64(555)
+		db.similar = &DBSimilarFields{Paid: int64Ptr(0), Type: int64Ptr(9), OriginalDateDue: &due}
 
 		result, err := enr.Enrich(ctx, exp, db)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Expense.Paid).To(HaveValue(Equal(int64(1))))
 		Expect(result.Expense.Type).To(HaveValue(Equal(int64(7))))
+		Expect(result.Expense.OriginalDateDue).To(HaveValue(Equal(int64(555))))
+		Expect(mem.saveCalls).To(Equal(1))
+		Expect(mem.mappings).To(HaveLen(1))
+	})
 
+	It("on a memory hit, tops up nil fields from SQLite", func() {
+		mem.mappings = append(mem.mappings, memory.TransactionMappings{
+			TransactionPattern: "Refund", Paid: int64Ptr(1),
+		})
+		db.similar = &DBSimilarFields{Paid: int64Ptr(0), Type: int64Ptr(9), SkipPaid: int64Ptr(0)}
+
+		result, err := enr.Enrich(ctx, exp, db)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Expense.Paid).To(HaveValue(Equal(int64(1))))
+		Expect(result.Expense.Type).To(HaveValue(Equal(int64(9))))
+		Expect(result.Expense.SkipPaid).To(HaveValue(Equal(int64(0))))
+		row := refundRow()
+		Expect(row.Paid).To(HaveValue(Equal(int64(1))))
+		Expect(row.Type).To(HaveValue(Equal(int64(9))))
+	})
+
+	It("on a memory miss, fills from SQLite and saves the Refund row", func() {
+		due := int64(777)
+		db.similar = &DBSimilarFields{Paid: int64Ptr(1), Type: int64Ptr(7), OriginalDateDue: &due}
+
+		result, err := enr.Enrich(ctx, exp, db)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Expense.Paid).To(HaveValue(Equal(int64(1))))
+		Expect(result.Expense.Type).To(HaveValue(Equal(int64(7))))
+		Expect(result.Expense.OriginalDateDue).To(HaveValue(Equal(int64(777))))
+		Expect(mem.saveCalls).To(Equal(1))
+		row := refundRow()
+		Expect(row.Paid).To(HaveValue(Equal(int64(1))))
+		Expect(row.Type).To(HaveValue(Equal(int64(7))))
+	})
+
+	It("leaves no-source fields NULL when there is no similar transaction", func() {
 		db.similar = nil
-		result, err = enr.Enrich(ctx, exp, db)
+
+		result, err := enr.Enrich(ctx, exp, db)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Expense.Paid).To(BeNil())
 		Expect(result.Expense.Type).To(BeNil())
+		Expect(result.Expense.OriginalDateDue).To(BeNil())
+		Expect(refundRow().Paid).To(BeNil())
 	})
 
-	It("does not save a transaction mapping from ResolveWithUserInput", func() {
-		_, err := enr.ResolveWithUserInput(ctx, exp, "Temu", "cat-shopping", "", "wallet-main", false)
+	It("reuses the single Refund row for a refund from a different merchant", func() {
+		db.similar = &DBSimilarFields{Paid: int64Ptr(1)}
+		_, err := enr.Enrich(ctx, exp, db)
+		Expect(err).NotTo(HaveOccurred())
+
+		exp.Description = "Amazon"
+		result, err := enr.Enrich(ctx, exp, db)
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(mem.saveCalls).To(Equal(0))
+		Expect(result.Expense.Note).To(HaveValue(Equal("Amazon")))
+		Expect(result.Expense.Paid).To(HaveValue(Equal(int64(1))))
+		Expect(mem.mappings).To(HaveLen(1))
+		Expect(refundRow().TransactionPattern).To(Equal("Refund"))
+	})
+
+	It("never wipes cached values when SQLite no longer has a similar transaction", func() {
+		db.similar = &DBSimilarFields{Paid: int64Ptr(1), Type: int64Ptr(7)}
+		_, err := enr.Enrich(ctx, exp, db)
+		Expect(err).NotTo(HaveOccurred())
+
+		db.similar = nil
+		result, err := enr.Enrich(ctx, exp, db)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Expense.Paid).To(HaveValue(Equal(int64(1))))
+		Expect(result.Expense.Type).To(HaveValue(Equal(int64(7))))
+		row := refundRow()
+		Expect(row.Paid).To(HaveValue(Equal(int64(1))))
+		Expect(row.Type).To(HaveValue(Equal(int64(7))))
+	})
+
+	It("saves the Refund row from ResolveWithUserInput, ignoring the user's name and category", func() {
+		enriched, err := enr.ResolveWithUserInput(ctx, exp, "Temu", "cat-shopping", "", "wallet-main", false, db)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(enriched.Name).To(HaveValue(Equal("Refund")))
+		Expect(enriched.CategoryFK).To(HaveValue(Equal("cat-income")))
+		Expect(mem.saveCalls).To(Equal(1))
+		Expect(refundRow().TransactionPattern).To(Equal("Refund"))
 	})
 })
+
+func int64Ptr(v int64) *int64 { return &v }

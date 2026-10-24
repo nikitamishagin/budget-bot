@@ -14,6 +14,8 @@ import (
 // MemoryStore is the subset of *memory.Store that the Enricher depends on.
 type MemoryStore interface {
 	FindBestMatch(ctx context.Context, pattern string) (memory.Candidate, bool, error)
+	// GetTransactionMapping is an exact (non-fuzzy) lookup by transaction pattern.
+	GetTransactionMapping(ctx context.Context, pattern string) (memory.TransactionMappings, bool, error)
 	TopCandidates(ctx context.Context, pattern string, n int) ([]memory.Candidate, error)
 	SaveTransactionMapping(ctx context.Context, mapping memory.TransactionMappings) error
 	// ResolveWallet / SaveWalletMapping are keyed by (accountPattern, currency): a single card can
@@ -251,6 +253,18 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 	if len(db) > 0 {
 		lookup = db[0]
 	}
+
+	if exp.Type == llmparser.TransactionRefund {
+		// A refund is always the fixed refundName/Income transaction: the user's name/category answers
+		// do not apply, and memory learns the single refundName row rather than the merchant.
+		log.Debug().Msg("enrich: refund from user input, using refund mapping")
+		mapping, similar, err := e.refundMapping(ctx, lookup)
+		if err != nil {
+			return nil, err
+		}
+		return e.buildExpense(exp, mapping, walletFK, similar), nil
+	}
+
 	var similar DBSimilarFields
 	if lookup != nil {
 		sim, err := lookupSimilar(ctx, name, lookup)
@@ -272,9 +286,7 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 	}
 	fillNoSourceFields(&mapping, similar)
 
-	if exp.Type == llmparser.TransactionRefund {
-		log.Debug().Msg("enrich: refund, transaction mapping save skipped")
-	} else if description != "" {
+	if description != "" {
 		if err := e.Memory.SaveTransactionMapping(ctx, mapping); err != nil {
 			return nil, fmt.Errorf("save transaction mapping: %w", err)
 		}
@@ -287,34 +299,61 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 }
 
 // enrichRefund enriches a refund: it is always named refundName, filed under the Income category
-// from the SQLite database and counted as income, without consulting memory or the LLM and
-// without learning a transaction mapping (the description is a merchant, not a refund name).
+// from the SQLite database and counted as income, without consulting the LLM. The merchant
+// description only ends up in the expense's Note; see refundMapping for how memory is used.
 func (e *Enricher) enrichRefund(ctx context.Context, exp llmparser.Expense, walletFK string, lookup DBLookup) (Result, error) {
-	if lookup == nil {
-		return Result{}, fmt.Errorf("resolve refund: no database to look up the %s category", incomeCategoryName)
-	}
-	pk, _, found, err := lookup.ResolveCategory(ctx, incomeCategoryName)
-	if err != nil {
-		return Result{}, fmt.Errorf("resolve refund: %w", err)
-	}
-	if !found {
-		return Result{}, fmt.Errorf("resolve refund: %s category not found", incomeCategoryName)
-	}
-	log.Debug().Str("category_fk", pk).Msg("enrich: refund category resolved")
-
-	similar, err := lookupSimilar(ctx, refundName, lookup)
+	mapping, similar, err := e.refundMapping(ctx, lookup)
 	if err != nil {
 		return Result{}, err
 	}
+	return Result{Expense: e.buildExpense(exp, mapping, walletFK, similar)}, nil
+}
 
-	mapping := memory.TransactionMappings{
-		Name:       strPtr(refundName),
-		CategoryFK: strPtr(pk),
-		Income:     boolPtr(true),
+// refundMapping resolves the single refundName memory row shared by every refund. It starts from
+// the cached row (exact lookup on refundName, never fuzzy and never the merchant description),
+// tops up any still-nil no-source field from a similar SQLite transaction found by refundName,
+// forces Name/CategoryFK/Income to the refund values and saves the merged row back to memory, so
+// nil fields never wipe cached ones. The merchant description is never written to memory: Note is
+// cleared here and set from the SMS description in buildExpense. similar is returned for
+// OriginalDateDue, which is always read live from SQLite.
+func (e *Enricher) refundMapping(ctx context.Context, lookup DBLookup) (memory.TransactionMappings, DBSimilarFields, error) {
+	if lookup == nil {
+		return memory.TransactionMappings{}, DBSimilarFields{}, fmt.Errorf("resolve refund: no database to look up the %s category", incomeCategoryName)
 	}
+	pk, _, found, err := lookup.ResolveCategory(ctx, incomeCategoryName)
+	if err != nil {
+		return memory.TransactionMappings{}, DBSimilarFields{}, fmt.Errorf("resolve refund: %w", err)
+	}
+	if !found {
+		return memory.TransactionMappings{}, DBSimilarFields{}, fmt.Errorf("resolve refund: %s category not found", incomeCategoryName)
+	}
+	log.Debug().Str("category_fk", pk).Msg("enrich: refund category resolved")
+
+	mapping, cached, err := e.Memory.GetTransactionMapping(ctx, refundName)
+	if err != nil {
+		return memory.TransactionMappings{}, DBSimilarFields{}, fmt.Errorf("get refund mapping: %w", err)
+	}
+	log.Debug().Bool("cached", cached).Msg("enrich: refund memory lookup")
+
+	similar, err := lookupSimilar(ctx, refundName, lookup)
+	if err != nil {
+		return memory.TransactionMappings{}, DBSimilarFields{}, err
+	}
+	log.Debug().Bool("similar_found", similar != DBSimilarFields{}).Msg("enrich: refund similar transaction lookup")
+
+	mapping.TransactionPattern = refundName
+	mapping.Name = strPtr(refundName)
+	mapping.Note = nil
+	mapping.CategoryFK = strPtr(pk)
+	mapping.Income = boolPtr(true)
 	fillNoSourceFields(&mapping, similar)
 
-	return Result{Expense: e.buildExpense(exp, mapping, walletFK, similar)}, nil
+	if err := e.Memory.SaveTransactionMapping(ctx, mapping); err != nil {
+		return memory.TransactionMappings{}, DBSimilarFields{}, fmt.Errorf("save refund mapping: %w", err)
+	}
+	log.Debug().Str("pattern", refundName).Msg("enrich: refund mapping saved")
+
+	return mapping, similar, nil
 }
 
 // resolveWallet resolves a bank account/card identifier and currency from the SMS to a wallet,
