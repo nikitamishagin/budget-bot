@@ -39,7 +39,17 @@ type DBLookup interface {
 	// agent can copy them instead of inventing defaults or asking the user (AGENTS.md's field
 	// resolution rule). ok is false when no such transaction exists.
 	FindSimilar(ctx context.Context, description string) (DBSimilarFields, bool, error)
+	// ResolveCategory resolves a category name (or primary key) from the SQLite categories table.
+	// isSubcategory reports whether the match is a subcategory; found is false when nothing matches.
+	ResolveCategory(ctx context.Context, input string) (categoryPK string, isSubcategory bool, found bool, err error)
 }
+
+const (
+	// refundName is the transaction name given to every refund.
+	refundName = "Refund"
+	// incomeCategoryName is the SQLite category every refund is filed under.
+	incomeCategoryName = "Income"
+)
 
 // DBCandidate is candidate enrichment (name/category/wallet/income) found directly in the
 // user's SQLite database file.
@@ -116,6 +126,11 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		return Result{NeedsUserInput: true, Question: "I could not determine the merchant/counterparty for this transaction. What is it for?", Kind: QuestionClarify}, nil
 	}
 
+	var lookup DBLookup
+	if len(db) > 0 {
+		lookup = db[0]
+	}
+
 	walletFK, walletKnown, err := e.resolveWallet(ctx, exp.Account, exp.Currency)
 	if err != nil {
 		return Result{}, err
@@ -126,10 +141,11 @@ func (e *Enricher) Enrich(ctx context.Context, exp llmparser.Expense, db ...DBLo
 		return Result{NeedsUserInput: true, Question: walletQuestion(exp.Account, exp.Currency), Kind: QuestionWallet}, nil
 	}
 
-	var lookup DBLookup
-	if len(db) > 0 {
-		lookup = db[0]
+	if exp.Type == llmparser.TransactionRefund {
+		log.Debug().Msg("enrich: refund, using Income category")
+		return e.enrichRefund(ctx, exp, walletFK, lookup)
 	}
+
 	similar, err := lookupSimilar(ctx, description, lookup)
 	if err != nil {
 		return Result{}, err
@@ -256,7 +272,9 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 	}
 	fillNoSourceFields(&mapping, similar)
 
-	if description != "" {
+	if exp.Type == llmparser.TransactionRefund {
+		log.Debug().Msg("enrich: refund, transaction mapping save skipped")
+	} else if description != "" {
 		if err := e.Memory.SaveTransactionMapping(ctx, mapping); err != nil {
 			return nil, fmt.Errorf("save transaction mapping: %w", err)
 		}
@@ -266,6 +284,37 @@ func (e *Enricher) ResolveWithUserInput(ctx context.Context, exp llmparser.Expen
 	}
 
 	return e.buildExpense(exp, mapping, walletFK, similar), nil
+}
+
+// enrichRefund enriches a refund: it is always named refundName, filed under the Income category
+// from the SQLite database and counted as income, without consulting memory or the LLM and
+// without learning a transaction mapping (the description is a merchant, not a refund name).
+func (e *Enricher) enrichRefund(ctx context.Context, exp llmparser.Expense, walletFK string, lookup DBLookup) (Result, error) {
+	if lookup == nil {
+		return Result{}, fmt.Errorf("resolve refund: no database to look up the %s category", incomeCategoryName)
+	}
+	pk, _, found, err := lookup.ResolveCategory(ctx, incomeCategoryName)
+	if err != nil {
+		return Result{}, fmt.Errorf("resolve refund: %w", err)
+	}
+	if !found {
+		return Result{}, fmt.Errorf("resolve refund: %s category not found", incomeCategoryName)
+	}
+	log.Debug().Str("category_fk", pk).Msg("enrich: refund category resolved")
+
+	similar, err := lookupSimilar(ctx, refundName, lookup)
+	if err != nil {
+		return Result{}, err
+	}
+
+	mapping := memory.TransactionMappings{
+		Name:       strPtr(refundName),
+		CategoryFK: strPtr(pk),
+		Income:     boolPtr(true),
+	}
+	fillNoSourceFields(&mapping, similar)
+
+	return Result{Expense: e.buildExpense(exp, mapping, walletFK, similar)}, nil
 }
 
 // resolveWallet resolves a bank account/card identifier and currency from the SMS to a wallet,
