@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -476,3 +477,32 @@ var _ = Describe("Enricher refunds", func() {
 })
 
 func int64Ptr(v int64) *int64 { return &v }
+
+var _ = Describe("Enricher date handling", func() {
+	build := func(date string, loc *time.Location) *EnrichedExpense {
+		enr := NewEnricher(newFakeMemory(), &fakeResolver{}, 5, 0.9).WithLocation(loc)
+		exp := llmparser.Expense{Amount: 42, Account: "5555", Description: "New Shop", Date: date}
+		enriched, err := enr.ResolveWithUserInput(context.Background(), exp, "New Shop", "cat-new", "", "wallet-x", false)
+		Expect(err).NotTo(HaveOccurred())
+		return enriched
+	}
+
+	It("interprets zone-less dates in the configured location", func() {
+		loc, err := time.LoadLocation("Europe/Belgrade")
+		Expect(err).NotTo(HaveOccurred())
+
+		enriched := build("2026.08.26 10:10", loc)
+
+		Expect(enriched.DateCreated).To(Equal(time.Date(2026, 8, 26, 8, 10, 0, 0, time.UTC).Unix()))
+		Expect(enriched.DateFallback).To(BeFalse())
+		Expect(enriched.DateTimeModified % 60).To(BeZero())
+	})
+
+	It("falls back to now when the date is empty", func() {
+		enriched := build("", nil)
+
+		Expect(enriched.DateFallback).To(BeTrue())
+		Expect(enriched.DateCreated).To(BeNumerically("~", time.Now().Unix(), 120))
+		Expect(enriched.DateCreated % 60).To(BeZero())
+	})
+})

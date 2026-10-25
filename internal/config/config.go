@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -48,8 +49,15 @@ type MemoryConfig struct {
 	HighConfidenceThreshold float64 `mapstructure:"high_confidence_threshold"`
 }
 
+// AgentConfig holds general agent settings.
+type AgentConfig struct {
+	// Timezone is an optional IANA time zone name (e.g. "Europe/Belgrade"). Empty means the local zone.
+	Timezone string `mapstructure:"timezone"`
+}
+
 // Config is the root application configuration.
 type Config struct {
+	Agent    AgentConfig    `mapstructure:"agent"`
 	LLM      LLMConfig      `mapstructure:"llm"`
 	Log      LogConfig      `mapstructure:"log"`
 	Memory   MemoryConfig   `mapstructure:"memory"`
@@ -105,7 +113,23 @@ func (c *Config) Validate() error {
 	if c.LLM.TimeoutSeconds <= 0 {
 		return fmt.Errorf("llm.timeout_seconds must be positive")
 	}
+	if _, err := c.Location(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// Location returns the configured time zone, or time.Local when Agent.Timezone is empty.
+func (c *Config) Location() (*time.Location, error) {
+	name := strings.TrimSpace(c.Agent.Timezone)
+	if name == "" {
+		return time.Local, nil
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, fmt.Errorf("agent.timezone %q: %w", name, err)
+	}
+	return loc, nil
 }
 
 // APIKey reads and returns the trimmed API key from LLM.APIKeyFile.

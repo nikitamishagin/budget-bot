@@ -121,7 +121,7 @@ type Expense struct {
     Amount float64 `json:"amount"`          // Transaction amount as printed in the SMS (always positive).
     Currency string `json:"currency"`       // ISO 4217 currency code, e.g. "USD", "RUB".
     Account string `json:"bank_account"`    // Bank account/card identifier from the SMS (e.g. last 4 digits).
-    Date string `json:"date"`               // Transaction date/time as printed, RFC3339 if determinable, else as-is.
+    Date string `json:"date"`               // Transaction date/time as printed, in yyyy.mm.dd hh:mm format (local time, no timezone). Interpreted in the configured timezone (`timezone` config, default: server local time).
     Description string `json:"description"` // Merchant/counterparty name, or the other account for transfers.
     ParseFailed bool `json:"parse_failed"`  // True if the model could not confidently extract data from the image.
     FailureReason string `json:"failure_reason,omitempty"` // Why parsing failed; empty when ParseFailed is false.

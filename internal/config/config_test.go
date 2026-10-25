@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -82,5 +83,40 @@ var _ = Describe("Config.APIKey", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(key).To(Equal(""))
+	})
+})
+
+var _ = Describe("Timezone", func() {
+	var dir string
+
+	BeforeEach(func() {
+		dir = GinkgoT().TempDir()
+	})
+
+	load := func(extra string) (*Config, error) {
+		path := filepath.Join(dir, "config.yaml")
+		Expect(os.WriteFile(path, []byte("llm:\n  model: \"m\"\n"+extra), 0o600)).To(Succeed())
+		return Load(path)
+	}
+
+	It("returns time.Local when empty", func() {
+		cfg, err := load("")
+		Expect(err).NotTo(HaveOccurred())
+		loc, err := cfg.Location()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loc).To(Equal(time.Local))
+	})
+
+	It("loads Europe/Belgrade", func() {
+		cfg, err := load("agent:\n  timezone: \"Europe/Belgrade\"\n")
+		Expect(err).NotTo(HaveOccurred())
+		loc, err := cfg.Location()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loc.String()).To(Equal("Europe/Belgrade"))
+	})
+
+	It("fails to load an invalid timezone", func() {
+		_, err := load("agent:\n  timezone: \"Not/AZone\"\n")
+		Expect(err).To(HaveOccurred())
 	})
 })

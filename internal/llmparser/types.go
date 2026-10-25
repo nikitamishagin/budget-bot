@@ -26,7 +26,8 @@ type Expense struct {
 	Currency string `json:"currency"`
 	// Account is the bank account/card identifier mentioned in the SMS (e.g. last 4 digits).
 	Account string `json:"bank_account"`
-	// Date is the transaction date/time as printed in the SMS, in RFC3339 if determinable, otherwise as-is.
+	// Date is the transaction date/time as printed in the SMS, in yyyy.mm.dd hh:mm format (local time, no timezone).
+	// The agent interprets it in the configured timezone (`timezone` config, default: server local time).
 	Date string `json:"date"`
 	// Description is the merchant/counterparty name, or the other account for transfers.
 	Description string `json:"description"`

@@ -88,6 +88,14 @@ type Enricher struct {
 	Resolver                Resolver
 	TopN                    int
 	HighConfidenceThreshold float64
+	loc                     *time.Location // location for zone-less SMS dates; nil means time.Local
+}
+
+// WithLocation sets the location used to interpret zone-less SMS dates (nil means time.Local)
+// and returns the Enricher for chaining.
+func (e *Enricher) WithLocation(loc *time.Location) *Enricher {
+	e.loc = loc
+	return e
 }
 
 // NewEnricher creates an Enricher with the given memory store and LLM resolver.
@@ -470,7 +478,15 @@ func (e *Enricher) buildExpense(exp llmparser.Expense, mapping memory.Transactio
 		amount = -amount
 	}
 
+	now := time.Now().Truncate(time.Minute)
+	dateCreated, ok := parseExpenseDate(exp.Date, e.loc)
+	if !ok {
+		log.Warn().Str("date", exp.Date).Msg("enrich: cannot parse expense date, using current time")
+		dateCreated = now.Unix()
+	}
+
 	return &EnrichedExpense{
+		DateFallback:                    !ok,
 		PairedTransactionFK:             mapping.PairedTransactionFK,
 		Name:                            mapping.Name,
 		Amount:                          amount,
@@ -478,8 +494,8 @@ func (e *Enricher) buildExpense(exp llmparser.Expense, mapping memory.Transactio
 		CategoryFK:                      mapping.CategoryFK,
 		SubCategoryFK:                   mapping.SubCategoryFK,
 		WalletFK:                        strPtrOrNil(walletFK),
-		DateCreated:                     parseExpenseDate(exp.Date),
-		DateTimeModified:                time.Now().Unix(),
+		DateCreated:                     dateCreated,
+		DateTimeModified:                now.Unix(),
 		OriginalDateDue:                 similar.OriginalDateDue,
 		Income:                          boolPtr(income),
 		PeriodLength:                    mapping.PeriodLength,
@@ -493,16 +509,6 @@ func (e *Enricher) buildExpense(exp llmparser.Expense, mapping memory.Transactio
 		ObjectiveFK:                     mapping.ObjectiveFK,
 		ObjectiveLoanFK:                 mapping.ObjectiveLoanFK,
 	}
-}
-
-// parseExpenseDate parses a llmparser.Expense.Date (RFC3339 "if determinable, otherwise as-is")
-// into a second-epoch timestamp (Cashew's convention), falling back to now when it cannot be
-// parsed.
-func parseExpenseDate(date string) int64 {
-	if t, err := time.Parse(time.RFC3339, date); err == nil {
-		return t.Unix()
-	}
-	return time.Now().Unix()
 }
 
 func toLLMCandidates(candidates []memory.Candidate, walletFK string) []llmparser.Candidate {

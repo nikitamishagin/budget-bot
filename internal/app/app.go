@@ -48,8 +48,14 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		return nil, fmt.Errorf("migrate memory schema: %w", err)
 	}
 
-	enricher := handler.NewEnricher(store, llmClient, cfg.Memory.TopN, cfg.Memory.HighConfidenceThreshold)
-	bot := telegram.NewBot(nil, llmClient, enricher, store, cfg.Telegram.AllowedUsernames, cfg.Telegram.DBPath)
+	loc, err := cfg.Location()
+	if err != nil {
+		store.Close()
+		return nil, err
+	}
+
+	enricher := handler.NewEnricher(store, llmClient, cfg.Memory.TopN, cfg.Memory.HighConfidenceThreshold).WithLocation(loc)
+	bot := telegram.NewBot(nil, llmClient, enricher, store, cfg.Telegram.AllowedUsernames, cfg.Telegram.DBPath).WithLocation(loc)
 
 	return &App{Bot: bot, Memory: store, Parser: llmClient, Enricher: enricher}, nil
 }

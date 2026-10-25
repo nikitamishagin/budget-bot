@@ -37,9 +37,12 @@ type Bot struct {
 	// OpenDatabase opens the SQLite database file uploaded by a chat; defaults to openStore, and
 	// is a field mainly, so tests can substitute a fake ExpenseWriter.
 	OpenDatabase func(path string) (ExpenseWriter, error)
-	sessions     *sessions
-	databases    *databases
-	screenshots  *screenshots
+	// Location is the time zone every user-facing date is rendered in (and zone-less raw SMS
+	// dates are interpreted in); nil means time.Local. Set it via WithLocation.
+	Location    *time.Location
+	sessions    *sessions
+	databases   *databases
+	screenshots *screenshots
 }
 
 // NewBot creates a Bot. allowedUsernames may be empty, in which case every user is rejected: the
@@ -62,6 +65,13 @@ func NewBot(sender Sender, parser ImageParser, enricher Enricher, accounts Accou
 		databases:        newDatabases(),
 		screenshots:      newScreenshots(),
 	}
+}
+
+// WithLocation sets the time zone user-facing dates are rendered in (nil means time.Local) and
+// returns the bot for chaining.
+func (b *Bot) WithLocation(loc *time.Location) *Bot {
+	b.Location = loc
+	return b
 }
 
 // normalizeUsername lower-cases a Telegram username and strips a leading "@", so usernames can
@@ -254,7 +264,7 @@ func (b *Bot) handleNameAnswer(chatID int64, state *pendingState, name string) {
 	state.name = name
 	state.kind = pendingCategory
 	b.sessions.set(chatID, state)
-	b.reply(chatID, handler.CategoryQuestion(state.expense.Description))
+	b.reply(chatID, withExpenseContext(handler.CategoryQuestion(state.expense.Description), state.expense, b.Location))
 }
 
 // handleCategoryAnswer records the user-supplied category and moves on to asking for the
@@ -277,7 +287,7 @@ func (b *Bot) handleCategoryAnswer(ctx context.Context, chatID int64, state *pen
 	state.categoryFK = resolvedCategoryPK
 	state.kind = pendingSubCategory
 	b.sessions.set(chatID, state)
-	b.reply(chatID, handler.SubCategoryQuestion(state.expense.Description))
+	b.reply(chatID, withExpenseContext(handler.SubCategoryQuestion(state.expense.Description), state.expense, b.Location))
 }
 
 // handleSubCategoryAnswer records the (optional) subcategory answer - "-" leaves it empty - and
@@ -323,7 +333,7 @@ func (b *Bot) handleSubCategoryAnswer(ctx context.Context, chatID int64, state *
 		}
 	}
 
-	enriched, err := b.Enricher.ResolveWithUserInput(ctx, state.expense, state.name, state.categoryFK, subCategoryFK, walletFK, state.expense.Type == llmparser.TransactionIncome, dbLookups...)
+	enriched, err := b.Enricher.ResolveWithUserInput(ctx, state.expense, state.name, state.categoryFK, subCategoryFK, walletFK, state.expense.Type == llmparser.TransactionIncome || state.expense.Type == llmparser.TransactionRefund, dbLookups...)
 	if err != nil {
 		log.Error().Err(err).Int64("chat_id", chatID).Msg("failed to resolve with user input")
 		b.reply(chatID, "Sorry, I could not save that. Please try again.")
@@ -544,7 +554,7 @@ func (b *Bot) processNext(ctx context.Context, chatID int64) {
 		if result.NeedsUserInput {
 			if result.Kind == handler.QuestionClarify {
 				log.Info().Int64("chat_id", chatID).Str("question", result.Question).Msg("skipped item that needs clarification")
-				b.reply(chatID, result.Question+"\nSkipping this item.")
+				b.reply(chatID, withExpenseContext(result.Question, exp, b.Location)+"\nSkipping this item.")
 				state.queue = remaining
 				continue
 			}
@@ -554,7 +564,7 @@ func (b *Bot) processNext(ctx context.Context, chatID int64) {
 			}
 			b.sessions.set(chatID, &pendingState{kind: kind, expense: exp, queue: remaining, batch: state.batch})
 			log.Info().Int64("chat_id", chatID).Str("question", result.Question).Msg("asked additional info from user")
-			b.reply(chatID, result.Question)
+			b.reply(chatID, withExpenseContext(result.Question, exp, b.Location))
 			return
 		}
 
@@ -597,10 +607,12 @@ func (b *Bot) formatBatchForChat(ctx context.Context, chatID int64, batch []*han
 		return "", err
 	}
 	defer db.Close()
-	return formatBatch(ctx, db, batch)
+	return formatBatch(ctx, db, batch, b.Location)
 }
 
-func formatEnrichedExpense(ctx context.Context, e *handler.EnrichedExpense, db ExpenseWriter) (string, error) {
+// formatEnrichedExpense renders one enriched expense for the chat, with its date shown in loc
+// (time.Local when nil) and a warning when the date fell back to "now".
+func formatEnrichedExpense(ctx context.Context, e *handler.EnrichedExpense, db ExpenseWriter, loc *time.Location) (string, error) {
 	if e == nil {
 		return "", fmt.Errorf("enriched expense is nil")
 	}
@@ -674,7 +686,10 @@ func formatEnrichedExpense(ctx context.Context, e *handler.EnrichedExpense, db E
 		log.Debug().Msg("wallet fk is nil, skipped lookup")
 	}
 
-	formattedDate := time.Unix(e.DateCreated, 0).Format("2006-01-02 15:04")
+	formattedDate := formatTimestamp(e.DateCreated, loc)
+	if e.DateFallback {
+		formattedDate += " " + dateFallbackMarker
+	}
 	formatted := fmt.Sprintf(
 		"%s: %s\nAmount: %.2f\nCategory: %s\nSubcategory: %s\nWallet: %s\nNote: %s\nDate: %s",
 		kind, strOrDash(e.Name), e.Amount, categoryName, subcategoryName,
@@ -695,13 +710,13 @@ func strOrDash(s *string) string {
 // formatBatch renders every expense in a batch as a numbered list, so the user can refer to an
 // entry by number when editing a rejected batch (see applyEdit) or simply review it before
 // approving.
-func formatBatch(ctx context.Context, db ExpenseWriter, batch []*handler.EnrichedExpense) (string, error) {
+func formatBatch(ctx context.Context, db ExpenseWriter, batch []*handler.EnrichedExpense, loc *time.Location) (string, error) {
 	var b strings.Builder
 	for i, e := range batch {
 		if i > 0 {
 			b.WriteString("\n\n")
 		}
-		formatted, err := formatEnrichedExpense(ctx, e, db)
+		formatted, err := formatEnrichedExpense(ctx, e, db, loc)
 		if err != nil {
 			return "", err
 		}

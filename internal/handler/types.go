@@ -16,6 +16,7 @@ type EnrichedExpense struct {
 	SubCategoryFK                   *string `db:"sub_category_fk"`    // The subcategory foreign key. Can be found in the "categories" table of the SQLite database or in the agent's memory.
 	WalletFK                        *string `db:"wallet_fk"`          // The wallet foreign key from the "wallets" table of the SQLite database.
 	DateCreated                     int64   `db:"date_created"`       // The date the transaction was completed (timestamp format without seconds).
+	DateFallback                    bool    `db:"-"`                  // True when the SMS date was missing/unparseable and DateCreated is the current time.
 	DateTimeModified                int64   `db:"date_time_modified"` // The date the agent handled the transaction (timestamp format without seconds).
 	OriginalDateDue                 *int64  `db:"original_date_due"`  // The date from the similar transaction in the SQLite database.
 	Income                          *int64  `db:"income"`             // Actually a boolean value (can be 0 or 1).

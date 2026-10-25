@@ -602,7 +602,8 @@ func (assertError) Error() string { return "boom" }
 
 var _ = Describe("formatEnrichedExpense", func() {
 	s := func(v string) *string { return &v }
-	date := time.Unix(1787311140, 0).Format("2006-01-02 15:04")
+	// 1787311140 is 2026-08-21 11:19 UTC; render in UTC so the expectation is deterministic.
+	date := "2026-08-21 11:19"
 
 	It("shows names and a readable date", func() {
 		writer := newFakeWriter()
@@ -610,7 +611,7 @@ var _ = Describe("formatEnrichedExpense", func() {
 		writer.categories["Cafe"] = "c2"
 		writer.wallets["Cash"] = "w1"
 		e := &handler.EnrichedExpense{Name: s("Coffee"), Amount: -3, CategoryFK: s("c1"), SubCategoryFK: s("c2"), WalletFK: s("w1"), DateCreated: 1787311140}
-		out, err := formatEnrichedExpense(context.Background(), e, writer)
+		out, err := formatEnrichedExpense(context.Background(), e, writer, time.UTC)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out).To(ContainSubstring("Category: Food"))
 		Expect(out).To(ContainSubstring("Subcategory: Cafe"))
@@ -621,7 +622,7 @@ var _ = Describe("formatEnrichedExpense", func() {
 	It("prints - when foreign keys are nil", func() {
 		writer := newFakeWriter()
 		e := &handler.EnrichedExpense{DateCreated: 1787311140}
-		out, err := formatEnrichedExpense(context.Background(), e, writer)
+		out, err := formatEnrichedExpense(context.Background(), e, writer, time.UTC)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out).To(ContainSubstring("Category: -"))
 		Expect(out).To(ContainSubstring("Subcategory: -"))
@@ -629,24 +630,88 @@ var _ = Describe("formatEnrichedExpense", func() {
 		Expect(out).To(ContainSubstring("Date: " + date))
 	})
 
+	It("renders the date in the configured location", func() {
+		belgrade, err := time.LoadLocation("Europe/Belgrade")
+		Expect(err).NotTo(HaveOccurred())
+		e := &handler.EnrichedExpense{DateCreated: 1787311140}
+		out, err := formatEnrichedExpense(context.Background(), e, newFakeWriter(), belgrade)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(ContainSubstring("Date: 2026-08-21 13:19"))
+		Expect(out).NotTo(ContainSubstring("1787311140"))
+		Expect(out).NotTo(ContainSubstring(dateFallbackMarker))
+	})
+
+	It("marks entries whose date fell back to now", func() {
+		e := &handler.EnrichedExpense{DateCreated: 1787311140, DateFallback: true}
+		out, err := formatEnrichedExpense(context.Background(), e, newFakeWriter(), time.UTC)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(ContainSubstring("Date: " + date + " " + dateFallbackMarker))
+	})
+
 	It("returns an error when a category is not found", func() {
 		writer := newFakeWriter()
 		e := &handler.EnrichedExpense{CategoryFK: s("unknown-cat")}
-		_, err := formatEnrichedExpense(context.Background(), e, writer)
+		_, err := formatEnrichedExpense(context.Background(), e, writer, time.UTC)
 		Expect(err).To(HaveOccurred())
 	})
 
 	It("returns an error when a subcategory is not found", func() {
 		writer := newFakeWriter()
 		e := &handler.EnrichedExpense{SubCategoryFK: s("unknown-subcat")}
-		_, err := formatEnrichedExpense(context.Background(), e, writer)
+		_, err := formatEnrichedExpense(context.Background(), e, writer, time.UTC)
 		Expect(err).To(HaveOccurred())
 	})
 
 	It("returns an error when a wallet is not found", func() {
 		writer := newFakeWriter()
 		e := &handler.EnrichedExpense{WalletFK: s("unknown-wallet")}
-		_, err := formatEnrichedExpense(context.Background(), e, writer)
+		_, err := formatEnrichedExpense(context.Background(), e, writer, time.UTC)
 		Expect(err).To(HaveOccurred())
+	})
+})
+
+var _ = Describe("date display", func() {
+	var belgrade *time.Location
+
+	BeforeEach(func() {
+		var err error
+		belgrade, err = time.LoadLocation("Europe/Belgrade")
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("formats epoch timestamps in the given location", func() {
+		Expect(formatTimestamp(1787311140, belgrade)).To(Equal("2026-08-21 13:19"))
+		Expect(formatTimestamp(1787311140, time.UTC)).To(Equal("2026-08-21 11:19"))
+	})
+
+	It("formats raw SMS dates in the given location", func() {
+		Expect(formatRawDate("2026-08-26T08:10:00Z", belgrade)).To(Equal("2026-08-26 10:10"))
+		Expect(formatRawDate("2026.08.26 10:10", belgrade)).To(Equal("2026-08-26 10:10"))
+		Expect(formatRawDate("yesterday", belgrade)).To(ContainSubstring("not recognized"))
+		Expect(formatRawDate("", belgrade)).To(Equal("unknown date"))
+	})
+
+	It("adds the transaction date to questions shown to the user", func() {
+		sender := &fakeSender{}
+		enricher := &fakeEnricher{result: handler.Result{NeedsUserInput: true, Question: "Which wallet does account \"1234\" belong to?", Kind: handler.QuestionWallet}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Shop", Amount: 12.5, Currency: "RSD", Account: "1234", Date: "2026-08-26T08:10:00Z"}}}
+		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"}).WithLocation(belgrade)
+		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+		bot.HandleParse(context.Background(), 1)
+
+		Expect(sender.last()).To(ContainSubstring("Transaction: 12.50 RSD, account 1234, 2026-08-26 10:10"))
+		Expect(sender.last()).NotTo(ContainSubstring("T08:10:00Z"))
+	})
+
+	It("shows the fallback marker and Belgrade time in the approval list", func() {
+		sender := &fakeSender{}
+		enricher := &fakeEnricher{result: handler.Result{Expense: &handler.EnrichedExpense{Name: strP("Starbucks"), Amount: -5.5, DateCreated: 1787311140, DateFallback: true}}}
+		parser := &fakeParser{expenses: []llmparser.Expense{{Description: "Starbucks"}}}
+		bot := newTestBot(sender, parser, enricher, newFakeAccounts(), []string{"alice"}).WithLocation(belgrade)
+		bot.HandlePhoto(context.Background(), 1, []byte("img"), "image/jpeg")
+		bot.HandleParse(context.Background(), 1)
+
+		Expect(sender.last()).To(ContainSubstring("Save these transactions?"))
+		Expect(sender.last()).To(ContainSubstring("Date: 2026-08-21 13:19 " + dateFallbackMarker))
 	})
 })
